@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { parseReceipt } from '../lib/claude.js';
+import { parseReceipt } from '../lib/gemini.js';
 import supabase from '../lib/supabase-admin.js';
 
 const router = Router();

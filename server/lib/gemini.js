@@ -1,8 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const SYSTEM_PROMPT = `You are a receipt parser. Analyze the receipt and return ONLY a JSON object with no other text, markdown, or explanation.
+const SYSTEM_INSTRUCTION = `You are a receipt parser. Analyze the receipt and return ONLY a JSON object with no other text, markdown, or explanation.
 
 The JSON must follow this exact schema:
 {
@@ -30,43 +30,33 @@ Rules:
 - Do not include subtotal, tax, or payment method lines in "lines" — only product lines and discounts`;
 
 /**
- * Parse a receipt image or PDF using Claude's vision.
+ * Parse a receipt image or PDF using Gemini's vision.
  *
  * @param {Buffer} fileBuffer - Raw file bytes
  * @param {string} mimeType   - 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
  * @returns {Promise<{parsed: object, rawText: string}>}
  */
 export async function parseReceipt(fileBuffer, mimeType) {
-  const base64 = fileBuffer.toString('base64');
-
-  let contentBlock;
-  if (mimeType === 'application/pdf') {
-    contentBlock = {
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: base64 },
-    };
-  } else {
-    contentBlock = {
-      type: 'image',
-      source: { type: 'base64', media_type: mimeType, data: base64 },
-    };
-  }
-
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: [contentBlock, { type: 'text', text: 'Parse this receipt.' }],
-      },
-    ],
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.0-flash',
+    systemInstruction: SYSTEM_INSTRUCTION,
   });
 
-  const rawText = response.content[0].text.trim();
+  const base64 = fileBuffer.toString('base64');
 
-  // Strip markdown code fences if Claude wrapped the JSON
+  const result = await model.generateContent([
+    {
+      inlineData: {
+        data: base64,
+        mimeType,
+      },
+    },
+    'Parse this receipt.',
+  ]);
+
+  const rawText = result.response.text().trim();
+
+  // Strip markdown code fences if Gemini wrapped the JSON
   const jsonText = rawText
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')
@@ -75,8 +65,8 @@ export async function parseReceipt(fileBuffer, mimeType) {
   let parsed;
   try {
     parsed = JSON.parse(jsonText);
-  } catch (err) {
-    const error = new Error('Claude returned non-JSON output');
+  } catch {
+    const error = new Error('Gemini returned non-JSON output');
     error.rawText = rawText;
     throw error;
   }
