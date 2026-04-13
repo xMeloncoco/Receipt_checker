@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { parseReceipt } from '../lib/gemini.js';
+import { parseReceiptDeepseek } from '../lib/deepseek.js';
 import supabase from '../lib/supabase-admin.js';
 
 const router = Router();
@@ -17,26 +18,83 @@ const upload = multer({
   },
 });
 
+// Ordered list of models to try. DeepSeek is the final fallback.
+const MODELS = [
+  { name: 'gemini-2.5-flash', type: 'gemini' },
+  { name: 'gemini-2.5-flash-lite', type: 'gemini' },
+  { name: 'gemini-3-flash', type: 'gemini' },
+  { name: 'gemini-3.1-flash-lite', type: 'gemini' },
+  { name: 'deepseek', type: 'deepseek' },
+];
+
 // ─── POST /api/parse-receipt ─────────────────────────────────────────────────
+// Streams NDJSON events so the frontend can show real-time model attempt status.
+// Event types: attempting | failed | success | result | error | all_failed
 router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded.' });
   }
 
-  try {
-    // ── 1. Call Claude ─────────────────────────────────────────────────────
-    const { parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype);
+  // ── Set up streaming NDJSON response ────────────────────────────────────
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
 
+  const send = (event) => {
+    res.write(JSON.stringify(event) + '\n');
+    // Flush for proxies that buffer (like the Vite dev proxy)
+    if (typeof res.flush === 'function') res.flush();
+  };
+
+  // Track whether the client disconnected
+  let aborted = false;
+  req.on('close', () => { aborted = true; });
+
+  // ── 1. Try each model in order ──────────────────────────────────────────
+  let parsed, rawText;
+  let successModel = null;
+  const attempts = []; // { model, error } for the report
+
+  for (const model of MODELS) {
+    if (aborted) break;
+
+    send({ type: 'attempting', model: model.name });
+
+    try {
+      if (model.type === 'gemini') {
+        ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, model.name));
+      } else {
+        ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype));
+      }
+
+      // Basic validation before declaring success
+      const { store_name, date, total, lines } = parsed;
+      if (!store_name || !date || total == null || !Array.isArray(lines)) {
+        throw new Error('Model returned incomplete data (missing store_name, date, total, or lines).');
+      }
+
+      send({ type: 'success', model: model.name });
+      successModel = model.name;
+      break;
+    } catch (err) {
+      const errorMessage = err.message || 'Unknown error';
+      attempts.push({ model: model.name, error: errorMessage });
+      send({ type: 'failed', model: model.name, error: errorMessage });
+    }
+  }
+
+  // ── All models failed ───────────────────────────────────────────────────
+  if (!successModel) {
+    send({ type: 'all_failed', attempts });
+    res.end();
+    return;
+  }
+
+  // ── 2. Proceed with DB operations (same as before) ──────────────────────
+  try {
     const { store_name, date, time, total, lines } = parsed;
 
-    if (!store_name || !date || total == null || !Array.isArray(lines)) {
-      return res.status(422).json({
-        error: 'Claude returned incomplete data.',
-        rawText,
-      });
-    }
-
-    // ── 2. Upsert store (case-insensitive match on name) ───────────────────
+    // ── Upsert store ──────────────────────────────────────────────────────
     const { data: existingStores, error: storeSelectErr } = await supabase
       .from('stores')
       .select('*')
@@ -58,8 +116,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       store = newStore;
     }
 
-    // ── 3. Duplicate receipt check ─────────────────────────────────────────
-    // Uses the dedup index logic: COALESCE(purchase_time, '00:00')
+    // ── Duplicate receipt check ───────────────────────────────────────────
     const purchaseTime = time || null;
     const dedupeTime = purchaseTime || '00:00';
 
@@ -72,26 +129,32 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       .filter(
         'purchase_time',
         purchaseTime ? 'eq' : 'is',
-        purchaseTime ? dedupeTime : null
+        purchaseTime ? dedupeTime : null,
       )
       .limit(1);
 
     if (dupErr) throw dupErr;
 
     if (dupCheck.length > 0) {
-      return res.json({
-        is_duplicate: true,
-        existing_receipt_id: dupCheck[0].id,
-        store,
-        parsed,
+      send({
+        type: 'result',
+        data: {
+          is_duplicate: true,
+          existing_receipt_id: dupCheck[0].id,
+          store,
+          parsed,
+        },
       });
+      res.end();
+      return;
     }
 
-    // ── 4. Upload image to Supabase Storage ────────────────────────────────
-    const ext = req.file.mimetype === 'application/pdf' ? 'pdf'
-               : req.file.mimetype === 'image/png' ? 'png'
-               : req.file.mimetype === 'image/webp' ? 'webp'
-               : 'jpg';
+    // ── Upload image to Supabase Storage ──────────────────────────────────
+    const ext =
+      req.file.mimetype === 'application/pdf' ? 'pdf'
+      : req.file.mimetype === 'image/png' ? 'png'
+      : req.file.mimetype === 'image/webp' ? 'webp'
+      : 'jpg';
     const storagePath = `${store.id}/${date}_${Date.now()}.${ext}`;
 
     const { error: uploadErr } = await supabase.storage
@@ -101,10 +164,9 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
         upsert: false,
       });
 
-    // Storage upload failure is non-fatal — continue without image
     const imageUrl = uploadErr ? null : storagePath;
 
-    // ── 5. Insert receipt ──────────────────────────────────────────────────
+    // ── Insert receipt ────────────────────────────────────────────────────
     const { data: receipt, error: receiptErr } = await supabase
       .from('receipts')
       .insert({
@@ -120,21 +182,20 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     if (receiptErr) throw receiptErr;
 
-    // ── 6. Upsert store_items and build receipt_lines ──────────────────────
+    // ── Upsert store_items and build receipt_lines ────────────────────────
     const receiptLineInserts = [];
 
     for (const line of lines) {
       const nameOnReceipt = line.name?.trim();
       if (!nameOnReceipt) continue;
 
-      // Try to insert the store_item; ignore conflict (same store + name)
       const { data: insertedItem, error: itemInsertErr } = await supabase
         .from('store_items')
         .insert({
           store_id: store.id,
           name_on_receipt: nameOnReceipt,
           price: line.unit_price,
-          is_discount: (line.unit_price < 0),
+          is_discount: line.unit_price < 0,
           discount_label: line.discount_label || null,
         })
         .select()
@@ -145,7 +206,6 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
       if (itemInsertErr) {
         if (itemInsertErr.code === '23505') {
-          // Unique violation — item already exists, fetch it
           const { data: existing, error: fetchErr } = await supabase
             .from('store_items')
             .select('*')
@@ -154,7 +214,6 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
             .single();
           if (fetchErr) throw fetchErr;
           storeItem = existing;
-          isNew = false;
         } else {
           throw itemInsertErr;
         }
@@ -174,7 +233,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       });
     }
 
-    // ── 7. Insert receipt_lines ────────────────────────────────────────────
+    // ── Insert receipt_lines ──────────────────────────────────────────────
     const lineRows = receiptLineInserts.map(({ _store_item: _, ...row }) => row);
 
     const { data: insertedLines, error: linesErr } = await supabase
@@ -184,25 +243,27 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     if (linesErr) throw linesErr;
 
-    // ── 8. Build response ──────────────────────────────────────────────────
+    // ── Build & send final result ─────────────────────────────────────────
     const enrichedLines = insertedLines.map((dbLine, i) => ({
       ...dbLine,
       store_item: receiptLineInserts[i]._store_item,
     }));
 
-    return res.json({
-      is_duplicate: false,
-      receipt,
-      store,
-      lines: enrichedLines,
+    send({
+      type: 'result',
+      data: {
+        is_duplicate: false,
+        receipt,
+        store,
+        lines: enrichedLines,
+      },
     });
   } catch (err) {
     console.error('parse-receipt error:', err);
-    return res.status(500).json({
-      error: err.message || 'Internal server error',
-      rawText: err.rawText,
-    });
+    send({ type: 'error', error: err.message || 'Internal server error' });
   }
+
+  res.end();
 });
 
 export default router;
