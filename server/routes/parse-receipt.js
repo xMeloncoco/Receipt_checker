@@ -18,83 +18,50 @@ const upload = multer({
   },
 });
 
-// Ordered list of models to try. DeepSeek is the final fallback.
-const MODELS = [
-  { name: 'gemini-2.5-flash', type: 'gemini' },
-  { name: 'gemini-2.5-flash-lite', type: 'gemini' },
-  { name: 'gemini-3-flash', type: 'gemini' },
-  { name: 'gemini-3.1-flash-lite', type: 'gemini' },
-  { name: 'deepseek', type: 'deepseek' },
-];
+// Known model types so the backend knows which API to call.
+const MODEL_TYPES = {
+  'gemini-2.5-flash': 'gemini',
+  'gemini-2.5-flash-lite': 'gemini',
+  'gemini-3-flash': 'gemini',
+  'gemini-3.1-flash-lite': 'gemini',
+  deepseek: 'deepseek',
+};
 
-// ─── POST /api/parse-receipt ─────────────────────────────────────────────────
-// Streams NDJSON events so the frontend can show real-time model attempt status.
-// Event types: attempting | failed | success | result | error | all_failed
+// ─── POST /api/parse-receipt?model=<name> ────────────────────────────────────
+// Tries a single model (passed via query param, defaults to gemini-2.5-flash).
+// Returns standard JSON — the frontend drives the fallback loop.
 router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded.' });
   }
 
-  // ── Set up streaming NDJSON response ────────────────────────────────────
-  res.setHeader('Content-Type', 'application/x-ndjson');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
+  const modelName = req.query.model || 'gemini-2.5-flash';
+  const modelType = MODEL_TYPES[modelName];
 
-  const send = (event) => {
-    res.write(JSON.stringify(event) + '\n');
-    // Flush for proxies that buffer (like the Vite dev proxy)
-    if (typeof res.flush === 'function') res.flush();
-  };
-
-  // Track whether the client disconnected
-  let aborted = false;
-  req.on('close', () => { aborted = true; });
-
-  // ── 1. Try each model in order ──────────────────────────────────────────
-  let parsed, rawText;
-  let successModel = null;
-  const attempts = []; // { model, error } for the report
-
-  for (const model of MODELS) {
-    if (aborted) break;
-
-    send({ type: 'attempting', model: model.name });
-
-    try {
-      if (model.type === 'gemini') {
-        ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, model.name));
-      } else {
-        ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype));
-      }
-
-      // Basic validation before declaring success
-      const { store_name, date, total, lines } = parsed;
-      if (!store_name || !date || total == null || !Array.isArray(lines)) {
-        throw new Error('Model returned incomplete data (missing store_name, date, total, or lines).');
-      }
-
-      send({ type: 'success', model: model.name });
-      successModel = model.name;
-      break;
-    } catch (err) {
-      const errorMessage = err.message || 'Unknown error';
-      attempts.push({ model: model.name, error: errorMessage });
-      send({ type: 'failed', model: model.name, error: errorMessage });
-    }
+  if (!modelType) {
+    return res.status(400).json({ error: `Unknown model: ${modelName}` });
   }
 
-  // ── All models failed ───────────────────────────────────────────────────
-  if (!successModel) {
-    send({ type: 'all_failed', attempts });
-    res.end();
-    return;
-  }
-
-  // ── 2. Proceed with DB operations (same as before) ──────────────────────
   try {
+    // ── 1. Call the requested model ───────────────────────────────────────
+    let parsed, rawText;
+
+    if (modelType === 'gemini') {
+      ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, modelName));
+    } else {
+      ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype));
+    }
+
     const { store_name, date, time, total, lines } = parsed;
 
-    // ── Upsert store ──────────────────────────────────────────────────────
+    if (!store_name || !date || total == null || !Array.isArray(lines)) {
+      return res.status(422).json({
+        error: 'Model returned incomplete data.',
+        rawText,
+      });
+    }
+
+    // ── 2. Upsert store (case-insensitive match on name) ─────────────────
     const { data: existingStores, error: storeSelectErr } = await supabase
       .from('stores')
       .select('*')
@@ -116,7 +83,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       store = newStore;
     }
 
-    // ── Duplicate receipt check ───────────────────────────────────────────
+    // ── 3. Duplicate receipt check ───────────────────────────────────────
     const purchaseTime = time || null;
     const dedupeTime = purchaseTime || '00:00';
 
@@ -136,20 +103,15 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
     if (dupErr) throw dupErr;
 
     if (dupCheck.length > 0) {
-      send({
-        type: 'result',
-        data: {
-          is_duplicate: true,
-          existing_receipt_id: dupCheck[0].id,
-          store,
-          parsed,
-        },
+      return res.json({
+        is_duplicate: true,
+        existing_receipt_id: dupCheck[0].id,
+        store,
+        parsed,
       });
-      res.end();
-      return;
     }
 
-    // ── Upload image to Supabase Storage ──────────────────────────────────
+    // ── 4. Upload image to Supabase Storage ──────────────────────────────
     const ext =
       req.file.mimetype === 'application/pdf' ? 'pdf'
       : req.file.mimetype === 'image/png' ? 'png'
@@ -166,7 +128,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     const imageUrl = uploadErr ? null : storagePath;
 
-    // ── Insert receipt ────────────────────────────────────────────────────
+    // ── 5. Insert receipt ────────────────────────────────────────────────
     const { data: receipt, error: receiptErr } = await supabase
       .from('receipts')
       .insert({
@@ -182,7 +144,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     if (receiptErr) throw receiptErr;
 
-    // ── Upsert store_items and build receipt_lines ────────────────────────
+    // ── 6. Upsert store_items and build receipt_lines ────────────────────
     const receiptLineInserts = [];
 
     for (const line of lines) {
@@ -233,7 +195,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       });
     }
 
-    // ── Insert receipt_lines ──────────────────────────────────────────────
+    // ── 7. Insert receipt_lines ──────────────────────────────────────────
     const lineRows = receiptLineInserts.map(({ _store_item: _, ...row }) => row);
 
     const { data: insertedLines, error: linesErr } = await supabase
@@ -243,27 +205,25 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     if (linesErr) throw linesErr;
 
-    // ── Build & send final result ─────────────────────────────────────────
+    // ── 8. Build response ────────────────────────────────────────────────
     const enrichedLines = insertedLines.map((dbLine, i) => ({
       ...dbLine,
       store_item: receiptLineInserts[i]._store_item,
     }));
 
-    send({
-      type: 'result',
-      data: {
-        is_duplicate: false,
-        receipt,
-        store,
-        lines: enrichedLines,
-      },
+    return res.json({
+      is_duplicate: false,
+      receipt,
+      store,
+      lines: enrichedLines,
     });
   } catch (err) {
-    console.error('parse-receipt error:', err);
-    send({ type: 'error', error: err.message || 'Internal server error' });
+    console.error(`parse-receipt error (model=${modelName}):`, err);
+    return res.status(500).json({
+      error: err.message || 'Internal server error',
+      rawText: err.rawText,
+    });
   }
-
-  res.end();
 });
 
 export default router;
