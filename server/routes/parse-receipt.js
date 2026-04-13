@@ -18,13 +18,13 @@ const upload = multer({
   },
 });
 
-// Known model types so the backend knows which API to call.
-const MODEL_TYPES = {
-  'gemini-2.5-flash': 'gemini',
-  'gemini-2.5-flash-lite': 'gemini',
-  'gemini-3-flash': 'gemini',
-  'gemini-3.1-flash-lite': 'gemini',
-  deepseek: 'deepseek',
+// Known models — type selects the provider, apiVersion overrides the Gemini default.
+const MODEL_CONFIG = {
+  'gemini-2.5-flash':              { type: 'gemini', apiVersion: 'v1beta' },
+  'gemini-2.5-flash-lite':         { type: 'gemini', apiVersion: 'v1beta' },
+  'gemini-3-flash-preview':        { type: 'gemini', apiVersion: 'v1' },
+  'gemini-3.1-flash-lite-preview': { type: 'gemini', apiVersion: 'v1' },
+  deepseek:                        { type: 'deepseek' },
 };
 
 // ─── POST /api/parse-receipt?model=<name> ────────────────────────────────────
@@ -36,9 +36,9 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
   }
 
   const modelName = req.query.model || 'gemini-2.5-flash';
-  const modelType = MODEL_TYPES[modelName];
+  const config = MODEL_CONFIG[modelName];
 
-  if (!modelType) {
+  if (!config) {
     return res.status(400).json({ error: `Unknown model: ${modelName}` });
   }
 
@@ -46,8 +46,8 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
   let parsed, rawText;
 
   try {
-    if (modelType === 'gemini') {
-      ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, modelName));
+    if (config.type === 'gemini') {
+      ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, modelName, config.apiVersion));
     } else {
       ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype));
     }

@@ -36,15 +36,15 @@ Rules:
  */
 export { SYSTEM_INSTRUCTION };
 
-export async function parseReceipt(fileBuffer, mimeType, modelName = 'gemini-2.5-flash') {
+export async function parseReceipt(fileBuffer, mimeType, modelName = 'gemini-2.5-flash', apiVersion = 'v1beta') {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not set — check your .env file');
 
   const genAI = new GoogleGenerativeAI(key);
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: SYSTEM_INSTRUCTION,
-  });
+  const model = genAI.getGenerativeModel(
+    { model: modelName, systemInstruction: SYSTEM_INSTRUCTION },
+    { apiVersion },
+  );
 
   const base64 = fileBuffer.toString('base64');
 
