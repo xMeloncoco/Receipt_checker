@@ -21,7 +21,7 @@ export async function parseReceiptDeepseek(fileBuffer, mimeType) {
       Authorization: `Bearer ${key}`,
     },
     body: JSON.stringify({
-      model: 'deepseek-chat',
+      model: 'deepseek-vl2',
       messages: [
         { role: 'system', content: SYSTEM_INSTRUCTION },
         {
