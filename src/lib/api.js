@@ -30,6 +30,7 @@ export async function parseReceipt(file, model) {
   if (!res.ok) {
     const err = new Error(data.error || `Server error ${res.status}`);
     err.rawText = data.rawText;
+    err.errorType = data.errorType || 'unknown';
     throw err;
   }
 

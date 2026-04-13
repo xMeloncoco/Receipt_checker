@@ -191,10 +191,30 @@ export default function UploadZone({ onResult }) {
         setProcessing(false);
         return; // done — don't try remaining models
       } catch (err) {
+        const errorMsg = err.message || 'Unknown error';
+
+        // App / DB error — the model succeeded but post-processing failed.
+        // Trying another model won't help, so stop the loop.
+        if (err.errorType === 'app_error') {
+          setAttempts((prev) =>
+            prev.map((a) =>
+              a.model === model
+                ? { ...a, status: 'failed', error: errorMsg }
+                : a,
+            ),
+          );
+          setFatalError(
+            `The model parsed the receipt successfully, but an internal error occurred: ${errorMsg}`,
+          );
+          setProcessing(false);
+          return;
+        }
+
+        // Model / API error — continue to the next model.
         setAttempts((prev) =>
           prev.map((a) =>
             a.model === model
-              ? { ...a, status: 'failed', error: err.message || 'Unknown error' }
+              ? { ...a, status: 'failed', error: errorMsg }
               : a,
           ),
         );

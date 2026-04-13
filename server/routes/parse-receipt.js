@@ -42,26 +42,41 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
     return res.status(400).json({ error: `Unknown model: ${modelName}` });
   }
 
-  try {
-    // ── 1. Call the requested model ───────────────────────────────────────
-    let parsed, rawText;
+  // ── 1. Call the requested model ─────────────────────────────────────────
+  let parsed, rawText;
 
+  try {
     if (modelType === 'gemini') {
       ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, modelName));
     } else {
       ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype));
     }
 
-    const { store_name, date, time, total, lines } = parsed;
+    const { store_name, date, total, lines } = parsed;
 
     if (!store_name || !date || total == null || !Array.isArray(lines)) {
       return res.status(422).json({
         error: 'Model returned incomplete data.',
+        errorType: 'model_error',
         rawText,
       });
     }
+  } catch (err) {
+    // Model / API error — the frontend should try the next model.
+    console.error(`model error (${modelName}):`, err);
+    return res.status(502).json({
+      error: err.message || 'Model request failed',
+      errorType: 'model_error',
+    });
+  }
 
-    // ── 2. Upsert store (case-insensitive match on name) ─────────────────
+  // ── 2. Model succeeded — now do DB operations ─────────────────────────────
+  // If anything below fails, it's an application bug, not a model issue.
+  // The frontend should stop trying other models.
+  try {
+    const { store_name, date, time, total, lines } = parsed;
+
+    // ── Upsert store ─────────────────────────────────────────────────────
     const { data: existingStores, error: storeSelectErr } = await supabase
       .from('stores')
       .select('*')
@@ -83,7 +98,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       store = newStore;
     }
 
-    // ── 3. Duplicate receipt check ───────────────────────────────────────
+    // ── Duplicate receipt check ──────────────────────────────────────────
     const purchaseTime = time || null;
     const dedupeTime = purchaseTime || '00:00';
 
@@ -111,7 +126,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       });
     }
 
-    // ── 4. Upload image to Supabase Storage ──────────────────────────────
+    // ── Upload image to Supabase Storage ─────────────────────────────────
     const ext =
       req.file.mimetype === 'application/pdf' ? 'pdf'
       : req.file.mimetype === 'image/png' ? 'png'
@@ -128,7 +143,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     const imageUrl = uploadErr ? null : storagePath;
 
-    // ── 5. Insert receipt ────────────────────────────────────────────────
+    // ── Insert receipt ───────────────────────────────────────────────────
     const { data: receipt, error: receiptErr } = await supabase
       .from('receipts')
       .insert({
@@ -144,7 +159,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     if (receiptErr) throw receiptErr;
 
-    // ── 6. Upsert store_items and build receipt_lines ────────────────────
+    // ── Upsert store_items and build receipt_lines ───────────────────────
     const receiptLineInserts = [];
 
     for (const line of lines) {
@@ -195,7 +210,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       });
     }
 
-    // ── 7. Insert receipt_lines ──────────────────────────────────────────
+    // ── Insert receipt_lines ─────────────────────────────────────────────
     const lineRows = receiptLineInserts.map(({ _store_item: _, ...row }) => row);
 
     const { data: insertedLines, error: linesErr } = await supabase
@@ -205,7 +220,7 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     if (linesErr) throw linesErr;
 
-    // ── 8. Build response ────────────────────────────────────────────────
+    // ── Build response ───────────────────────────────────────────────────
     const enrichedLines = insertedLines.map((dbLine, i) => ({
       ...dbLine,
       store_item: receiptLineInserts[i]._store_item,
@@ -218,10 +233,11 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       lines: enrichedLines,
     });
   } catch (err) {
-    console.error(`parse-receipt error (model=${modelName}):`, err);
+    // Application / DB error — trying another model won't help.
+    console.error(`app error after model ${modelName} succeeded:`, err);
     return res.status(500).json({
       error: err.message || 'Internal server error',
-      rawText: err.rawText,
+      errorType: 'app_error',
     });
   }
 });
