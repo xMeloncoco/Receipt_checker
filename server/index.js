@@ -28,6 +28,15 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
+// Global error handler — must be last and have exactly 4 params for Express to treat it as an error handler
+// Catches multer errors, unhandled promise rejections forwarded via next(err), etc.
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled server error:', err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ error: err.message || 'Internal server error' });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

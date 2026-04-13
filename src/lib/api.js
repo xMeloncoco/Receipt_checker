@@ -12,10 +12,17 @@ export async function parseReceipt(file) {
     body: form,
   });
 
-  const data = await res.json();
+  // Read as text first — the body may be empty or non-JSON on server crashes
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server error ${res.status}: ${text || '(empty response)'}`);
+  }
 
   if (!res.ok) {
-    const err = new Error(data.error || 'Upload failed');
+    const err = new Error(data.error || `Server error ${res.status}`);
     err.rawText = data.rawText;
     throw err;
   }
