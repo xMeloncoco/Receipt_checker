@@ -1,9 +1,18 @@
 import { useState, useRef, useCallback } from 'react';
-import { parseReceiptStream } from '../../lib/api.js';
+import { parseReceipt } from '../../lib/api.js';
 import Spinner from '../ui/Spinner.jsx';
 
 const ACCEPTED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 const ACCEPTED_EXT = '.jpg,.jpeg,.png,.webp,.pdf';
+
+// Ordered fallback chain — frontend drives the loop so each attempt renders.
+const MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3-flash',
+  'gemini-3.1-flash-lite',
+  'deepseek',
+];
 
 // ─── Error categorisation ────────────────────────────────────────────────────
 function categoriseError(error) {
@@ -121,7 +130,6 @@ export default function UploadZone({ onResult }) {
   const [processing, setProcessing] = useState(false);
   const [attempts, setAttempts] = useState([]);
   const [allFailed, setAllFailed] = useState(false);
-  const [failedAttempts, setFailedAttempts] = useState([]);
   const [processResult, setProcessResult] = useState(null);
   const [fatalError, setFatalError] = useState(null);
   const [dragging, setDragging] = useState(false);
@@ -159,60 +167,43 @@ export default function UploadZone({ onResult }) {
   const onDragLeave = () => setDragging(false);
   const onInputChange = (e) => handleFile(e.target.files[0]);
 
-  // ── Process receipt with model fallback chain ─────────────────────────────
+  // ── Process receipt — try each model one-by-one ───────────────────────────
   const handleSubmit = async () => {
     if (!file) return;
     setProcessing(true);
     setAttempts([]);
     setAllFailed(false);
-    setFailedAttempts([]);
     setProcessResult(null);
     setFatalError(null);
 
-    try {
-      await parseReceiptStream(file, (event) => {
-        switch (event.type) {
-          case 'attempting':
-            setAttempts((prev) => [...prev, { model: event.model, status: 'attempting' }]);
-            break;
+    for (const model of MODELS) {
+      // Show the "Sending image to …" row — React renders before the await.
+      setAttempts((prev) => [...prev, { model, status: 'attempting' }]);
 
-          case 'failed':
-            setAttempts((prev) =>
-              prev.map((a) =>
-                a.model === event.model
-                  ? { ...a, status: 'failed', error: event.error }
-                  : a,
-              ),
-            );
-            break;
+      try {
+        const result = await parseReceipt(file, model);
 
-          case 'success':
-            setAttempts((prev) =>
-              prev.map((a) =>
-                a.model === event.model ? { ...a, status: 'success' } : a,
-              ),
-            );
-            break;
-
-          case 'result':
-            setProcessResult(event.data);
-            break;
-
-          case 'all_failed':
-            setAllFailed(true);
-            setFailedAttempts(event.attempts || []);
-            break;
-
-          case 'error':
-            setFatalError(event.error || 'An unexpected error occurred while saving the receipt.');
-            break;
-        }
-      });
-    } catch (err) {
-      setFatalError(err.message || 'Failed to connect to server.');
-    } finally {
-      setProcessing(false);
+        // Mark success & store result
+        setAttempts((prev) =>
+          prev.map((a) => (a.model === model ? { ...a, status: 'success' } : a)),
+        );
+        setProcessResult(result);
+        setProcessing(false);
+        return; // done — don't try remaining models
+      } catch (err) {
+        setAttempts((prev) =>
+          prev.map((a) =>
+            a.model === model
+              ? { ...a, status: 'failed', error: err.message || 'Unknown error' }
+              : a,
+          ),
+        );
+      }
     }
+
+    // Every model failed
+    setAllFailed(true);
+    setProcessing(false);
   };
 
   const reset = () => {
@@ -221,7 +212,6 @@ export default function UploadZone({ onResult }) {
     setFatalError(null);
     setAttempts([]);
     setAllFailed(false);
-    setFailedAttempts([]);
     setProcessResult(null);
     if (inputRef.current) inputRef.current.value = '';
   };
@@ -351,7 +341,7 @@ export default function UploadZone({ onResult }) {
       {/* ── Report modal ───────────────────────────────────────────────────── */}
       {showReport && (
         <ReportModal
-          attempts={failedAttempts.length > 0 ? failedAttempts : attempts.filter((a) => a.status === 'failed')}
+          attempts={attempts.filter((a) => a.status === 'failed')}
           onClose={() => setShowReport(false)}
         />
       )}

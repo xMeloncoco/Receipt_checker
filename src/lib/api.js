@@ -1,52 +1,37 @@
 /**
- * Send a receipt file to the backend for parsing.
- * The backend streams NDJSON events as it tries each model in the fallback chain.
+ * Send a receipt file to the backend for parsing with a specific model.
  *
- * @param {File}     file     - The receipt image / PDF
- * @param {function} onEvent  - Called for each streamed event object
- * @returns {Promise<void>}   - Resolves when the stream ends
+ * @param {File}   file  - The receipt image / PDF
+ * @param {string} model - Model name to try (e.g. 'gemini-2.5-flash')
+ * @returns {Promise<object>} Parse result from the server
  */
-export async function parseReceiptStream(file, onEvent) {
+export async function parseReceipt(file, model) {
   const form = new FormData();
   form.append('receipt', file);
 
-  const res = await fetch('/api/parse-receipt', {
+  const url = model
+    ? `/api/parse-receipt?model=${encodeURIComponent(model)}`
+    : '/api/parse-receipt';
+
+  const res = await fetch(url, {
     method: 'POST',
     body: form,
   });
 
-  if (!res.ok && !res.body) {
-    throw new Error(`Server error ${res.status}`);
+  // Read as text first — the body may be empty or non-JSON on server crashes
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server error ${res.status}: ${text || '(empty response)'}`);
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop(); // keep any incomplete trailing line
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        onEvent(JSON.parse(line));
-      } catch {
-        // skip malformed lines
-      }
-    }
+  if (!res.ok) {
+    const err = new Error(data.error || `Server error ${res.status}`);
+    err.rawText = data.rawText;
+    throw err;
   }
 
-  // Flush remaining buffer
-  if (buffer.trim()) {
-    try {
-      onEvent(JSON.parse(buffer));
-    } catch {
-      // skip
-    }
-  }
+  return data;
 }
