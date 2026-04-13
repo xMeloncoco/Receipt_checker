@@ -34,14 +34,15 @@ Rules:
  * @param {string} mimeType   - 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
  * @returns {Promise<{parsed: object, rawText: string}>}
  */
-export async function parseReceipt(fileBuffer, mimeType) {
-  // Lazy init — keeps the server alive even if GEMINI_API_KEY isn't set yet
+export { SYSTEM_INSTRUCTION };
+
+export async function parseReceipt(fileBuffer, mimeType, modelName = 'gemini-2.5-flash') {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not set — check your .env file');
 
   const genAI = new GoogleGenerativeAI(key);
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    model: modelName,
     systemInstruction: SYSTEM_INSTRUCTION,
   });
 
@@ -69,7 +70,7 @@ export async function parseReceipt(fileBuffer, mimeType) {
   try {
     parsed = JSON.parse(jsonText);
   } catch {
-    const error = new Error('Gemini returned non-JSON output');
+    const error = new Error('Model returned non-JSON output');
     error.rawText = rawText;
     throw error;
   }
