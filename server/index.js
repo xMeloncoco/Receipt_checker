@@ -1,4 +1,13 @@
 import 'dotenv/config';
+
+// Keep the process alive and log clearly instead of crashing silently
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';

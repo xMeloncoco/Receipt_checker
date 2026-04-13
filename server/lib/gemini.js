@@ -1,7 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
 const SYSTEM_INSTRUCTION = `You are a receipt parser. Analyze the receipt and return ONLY a JSON object with no other text, markdown, or explanation.
 
 The JSON must follow this exact schema:
@@ -37,6 +35,11 @@ Rules:
  * @returns {Promise<{parsed: object, rawText: string}>}
  */
 export async function parseReceipt(fileBuffer, mimeType) {
+  // Lazy init — keeps the server alive even if GEMINI_API_KEY isn't set yet
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY is not set — check your .env file');
+
+  const genAI = new GoogleGenerativeAI(key);
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.0-flash',
     systemInstruction: SYSTEM_INSTRUCTION,
