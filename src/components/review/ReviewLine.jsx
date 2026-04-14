@@ -112,7 +112,7 @@ export default function ReviewLine({
         )}
         {/* Receipt line ID */}
         <div className="flex flex-col gap-0.5 ml-auto">
-          <span className="text-gray-400 text-xs">Line #</span>
+          <span className="text-gray-400 text-xs">Product #</span>
           {field('receipt_line_id')}
         </div>
       </div>
