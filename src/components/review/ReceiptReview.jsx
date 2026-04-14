@@ -109,6 +109,26 @@ export default function ReceiptReview({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState(null);
   const [matchSelectorIndex, setMatchSelectorIndex] = useState(null);
+  const [magnifier, setMagnifier] = useState({ active: false, x: 0, y: 0, pctX: 0, pctY: 0, containerW: 0, containerH: 0 });
+
+  const handleMagnify = useCallback((e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setMagnifier({
+      active: true,
+      x,
+      y,
+      pctX: x / rect.width,
+      pctY: y / rect.height,
+      containerW: rect.width,
+      containerH: rect.height,
+    });
+  }, []);
+
+  const handleMagnifyEnd = useCallback(() => {
+    setMagnifier((m) => ({ ...m, active: false }));
+  }, []);
 
   // ── Compute match results ──────────────────────────────────────────────
   const matchResults = useMemo(
@@ -326,13 +346,45 @@ export default function ReceiptReview({
     <div className="flex gap-6 items-start">
       {/* Left: Receipt image */}
       <div className="w-2/5 sticky top-4 shrink-0">
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div
+          className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden relative"
+          style={{ cursor: previewUrl ? 'crosshair' : 'default' }}
+          onMouseMove={previewUrl ? handleMagnify : undefined}
+          onMouseLeave={previewUrl ? handleMagnifyEnd : undefined}
+        >
           {previewUrl ? (
-            <img
-              src={previewUrl}
-              alt="Receipt"
-              className="w-full object-contain max-h-[85vh]"
-            />
+            <>
+              <img
+                src={previewUrl}
+                alt="Receipt"
+                className="w-full object-contain max-h-[85vh]"
+              />
+              {magnifier.active && (
+                <div
+                  className="absolute rounded-full border-2 border-white shadow-2xl overflow-hidden pointer-events-none z-10"
+                  style={{
+                    width: 160,
+                    height: 160,
+                    left: magnifier.x - 80,
+                    top: magnifier.y - 80,
+                  }}
+                >
+                  <img
+                    src={previewUrl}
+                    alt=""
+                    style={{
+                      position: 'absolute',
+                      width: `${magnifier.containerW * 3}px`,
+                      height: `${magnifier.containerH * 3}px`,
+                      maxWidth: 'none',
+                      objectFit: 'contain',
+                      left: `${-(magnifier.pctX * magnifier.containerW * 3 - 80)}px`,
+                      top: `${-(magnifier.pctY * magnifier.containerH * 3 - 80)}px`,
+                    }}
+                  />
+                </div>
+              )}
+            </>
           ) : file?.type === 'application/pdf' ? (
             <div className="flex flex-col items-center justify-center py-20 text-gray-400">
               <div className="text-5xl mb-2">&#128196;</div>
