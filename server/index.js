@@ -13,6 +13,7 @@ import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import parseReceiptRouter from './routes/parse-receipt.js';
+import saveReceiptRouter from './routes/save-receipt.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -23,6 +24,7 @@ app.use(express.json());
 
 // Routes
 app.use('/api', parseReceiptRouter);
+app.use('/api', saveReceiptRouter);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });

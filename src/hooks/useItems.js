@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import supabase from '../lib/supabase.js';
 
-export function useGroceryItems() {
+export function useItems() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -10,9 +10,9 @@ export function useGroceryItems() {
     setLoading(true);
     setError(null);
     const { data: rows, error: err } = await supabase
-      .from('grocery_items')
+      .from('items')
       .select('*')
-      .order('canonical_name');
+      .order('name');
     if (err) {
       setError(err.message);
     } else {
@@ -23,14 +23,14 @@ export function useGroceryItems() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
-  const addItem = useCallback(async ({ canonical_name, category, unit_type }) => {
+  const addItem = useCallback(async ({ name, type, subtype }) => {
     const { data: row, error: err } = await supabase
-      .from('grocery_items')
-      .insert({ canonical_name, category, unit_type })
+      .from('items')
+      .insert({ name, type: type || null, subtype: subtype || null })
       .select()
       .single();
     if (err) throw err;
-    setData(prev => [...prev, row].sort((a, b) => a.canonical_name.localeCompare(b.canonical_name)));
+    setData(prev => [...prev, row].sort((a, b) => a.name.localeCompare(b.name)));
     return row;
   }, []);
 

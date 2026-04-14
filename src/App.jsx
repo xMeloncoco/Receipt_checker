@@ -4,7 +4,7 @@ import PageWrapper from './components/layout/PageWrapper.jsx';
 import UploadPage from './pages/UploadPage.jsx';
 import HistoryPage from './pages/HistoryPage.jsx';
 import StoresPage from './pages/StoresPage.jsx';
-import GroceryItemsPage from './pages/GroceryItemsPage.jsx';
+import ItemsPage from './pages/ItemsPage.jsx';
 
 export default function App() {
   return (
@@ -17,7 +17,7 @@ export default function App() {
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/stores" element={<StoresPage />} />
-            <Route path="/grocery-items" element={<GroceryItemsPage />} />
+            <Route path="/items" element={<ItemsPage />} />
           </Routes>
         </PageWrapper>
       </div>

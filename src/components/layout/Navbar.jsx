@@ -4,13 +4,13 @@ const links = [
   { to: '/upload', label: 'Upload' },
   { to: '/history', label: 'History' },
   { to: '/stores', label: 'Stores' },
-  { to: '/grocery-items', label: 'Grocery Items' },
+  { to: '/items', label: 'Items' },
 ];
 
 export default function Navbar() {
   return (
     <nav className="bg-white border-b border-gray-200 shadow-sm">
-      <div className="max-w-5xl mx-auto px-4 flex items-center gap-6 h-14">
+      <div className="max-w-7xl mx-auto px-4 flex items-center gap-6 h-14">
         <span className="font-bold text-indigo-700 text-lg tracking-tight">
           Receipt Tracker
         </span>

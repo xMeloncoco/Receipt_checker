@@ -331,7 +331,7 @@ export default function UploadZone({ onResult }) {
       {succeeded ? (
         <button
           type="button"
-          onClick={() => onResult(processResult)}
+          onClick={() => onResult({ ...processResult, file })}
           className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-lg
             bg-green-600 text-white font-semibold text-sm
             hover:bg-green-700 transition-colors"
