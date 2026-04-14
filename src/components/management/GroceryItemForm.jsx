@@ -1,32 +1,32 @@
 import { useState } from 'react';
-import { useGroceryItems } from '../../hooks/useGroceryItems.js';
+import { useItems } from '../../hooks/useItems.js';
 import Table from '../ui/Table.jsx';
 import Spinner from '../ui/Spinner.jsx';
 
 const columns = [
-  { key: 'canonical_name', label: 'Name' },
-  { key: 'category', label: 'Category', render: (row) => row.category || '—' },
-  { key: 'unit_type', label: 'Unit Type', render: (row) => row.unit_type || '—' },
+  { key: 'name', label: 'Name' },
+  { key: 'type', label: 'Type', render: (row) => row.type || '—' },
+  { key: 'subtype', label: 'Subtype', render: (row) => row.subtype || '—' },
 ];
 
 export default function GroceryItemForm() {
-  const { data, loading, error, addItem } = useGroceryItems();
-  const [form, setForm] = useState({ canonical_name: '', category: '', unit_type: '' });
+  const { data, loading, error, addItem } = useItems();
+  const [form, setForm] = useState({ name: '', type: '', subtype: '' });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.canonical_name.trim()) return;
+    if (!form.name.trim()) return;
     setSaving(true);
     setFormError(null);
     try {
       await addItem({
-        canonical_name: form.canonical_name.trim(),
-        category: form.category.trim() || null,
-        unit_type: form.unit_type.trim() || null,
+        name: form.name.trim(),
+        type: form.type.trim() || null,
+        subtype: form.subtype.trim() || null,
       });
-      setForm({ canonical_name: '', category: '', unit_type: '' });
+      setForm({ name: '', type: '', subtype: '' });
     } catch (err) {
       setFormError(err.message);
     } finally {
@@ -38,33 +38,33 @@ export default function GroceryItemForm() {
     <div className="space-y-6">
       {/* Add form */}
       <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">Add Grocery Item</h2>
+        <h2 className="text-sm font-semibold text-gray-700 mb-3">Add Item</h2>
         <form onSubmit={handleSubmit} className="flex flex-wrap gap-3 items-end">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Canonical Name *</label>
+            <label className="text-xs text-gray-500">Name *</label>
             <input
               required
-              value={form.canonical_name}
-              onChange={e => setForm(p => ({ ...p, canonical_name: e.target.value }))}
-              placeholder="e.g. Whole Milk"
+              value={form.name}
+              onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+              placeholder="e.g. Chicken"
               className="border border-gray-300 rounded px-3 py-1.5 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-indigo-300"
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Category</label>
+            <label className="text-xs text-gray-500">Type</label>
             <input
-              value={form.category}
-              onChange={e => setForm(p => ({ ...p, category: e.target.value }))}
-              placeholder="e.g. Dairy"
+              value={form.type}
+              onChange={e => setForm(p => ({ ...p, type: e.target.value }))}
+              placeholder="e.g. Food"
               className="border border-gray-300 rounded px-3 py-1.5 text-sm w-36 focus:outline-none focus:ring-2 focus:ring-indigo-300"
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Unit Type</label>
+            <label className="text-xs text-gray-500">Subtype</label>
             <input
-              value={form.unit_type}
-              onChange={e => setForm(p => ({ ...p, unit_type: e.target.value }))}
-              placeholder="e.g. l / kg / piece"
+              value={form.subtype}
+              onChange={e => setForm(p => ({ ...p, subtype: e.target.value }))}
+              placeholder="e.g. Meat"
               className="border border-gray-300 rounded px-3 py-1.5 text-sm w-32 focus:outline-none focus:ring-2 focus:ring-indigo-300"
             />
           </div>
@@ -73,7 +73,7 @@ export default function GroceryItemForm() {
             disabled={saving}
             className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
-            {saving ? 'Saving…' : 'Add Item'}
+            {saving ? 'Saving...' : 'Add Item'}
           </button>
         </form>
         {formError && <p className="text-red-600 text-xs mt-2">{formError}</p>}
@@ -86,7 +86,7 @@ export default function GroceryItemForm() {
         <p className="text-red-600 text-sm">{error}</p>
       ) : (
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <Table columns={columns} rows={data} emptyMessage="No grocery items yet." />
+          <Table columns={columns} rows={data} emptyMessage="No items yet." />
         </div>
       )}
     </div>

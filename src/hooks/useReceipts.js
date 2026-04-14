@@ -11,7 +11,7 @@ export function useReceipts() {
     setError(null);
     const { data: rows, error: err } = await supabase
       .from('receipts')
-      .select('*, stores(name, chain)')
+      .select('*, stores(name)')
       .order('purchase_date', { ascending: false });
     if (err) {
       setError(err.message);

@@ -15,9 +15,9 @@ const columns = [
     render: (row) => row.purchase_time ?? '—',
   },
   {
-    key: 'total_amount',
+    key: 'total_with_discount',
     label: 'Total',
-    render: (row) => `€ ${Number(row.total_amount).toFixed(2)}`,
+    render: (row) => `€ ${Number(row.total_with_discount).toFixed(2)}`,
   },
   {
     key: 'created_at',

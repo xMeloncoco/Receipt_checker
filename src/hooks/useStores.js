@@ -23,10 +23,10 @@ export function useStores() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
-  const addStore = useCallback(async ({ name, chain, location }) => {
+  const addStore = useCallback(async ({ name }) => {
     const { data: row, error: err } = await supabase
       .from('stores')
-      .insert({ name, chain, location })
+      .insert({ name })
       .select()
       .single();
     if (err) throw err;

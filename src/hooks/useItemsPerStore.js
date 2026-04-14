@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import supabase from '../lib/supabase.js';
 
-export function useStoreItems(storeId) {
+export function useItemsPerStore(storeId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -11,8 +11,8 @@ export function useStoreItems(storeId) {
     setLoading(true);
     setError(null);
     const { data: rows, error: err } = await supabase
-      .from('store_items')
-      .select('*')
+      .from('items_per_store')
+      .select('*, items(id, name, type, subtype)')
       .eq('store_id', storeId)
       .order('name_on_receipt');
     if (err) {

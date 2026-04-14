@@ -28,8 +28,8 @@ const MODEL_CONFIG = {
 };
 
 // ─── POST /api/parse-receipt?model=<name> ────────────────────────────────────
-// Tries a single model (passed via query param, defaults to gemini-2.5-flash).
-// Returns standard JSON — the frontend drives the fallback loop.
+// Parse-only: calls AI, checks for duplicates, looks up items_per_store.
+// Does NOT write anything to the database.
 router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded.' });
@@ -52,9 +52,9 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
       ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype));
     }
 
-    const { store_name, date, total, lines } = parsed;
+    const { store_name, date, total_with_discount, lines } = parsed;
 
-    if (!store_name || !date || total == null || !Array.isArray(lines)) {
+    if (!store_name || !date || total_with_discount == null || !Array.isArray(lines)) {
       return res.status(422).json({
         error: 'Model returned incomplete data.',
         errorType: 'model_error',
@@ -70,13 +70,11 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
     });
   }
 
-  // ── 2. Model succeeded — now do DB operations ─────────────────────────────
-  // If anything below fails, it's an application bug, not a model issue.
-  // The frontend should stop trying other models.
+  // ── 2. Model succeeded — now do read-only DB lookups ────────────────────
   try {
-    const { store_name, date, time, total, lines } = parsed;
+    const { store_name, date, time, total_with_discount } = parsed;
 
-    // ── Upsert store ─────────────────────────────────────────────────────
+    // ── Look up store (read-only) ────────────────────────────────────────
     const { data: existingStores, error: storeSelectErr } = await supabase
       .from('stores')
       .select('*')
@@ -85,155 +83,60 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
     if (storeSelectErr) throw storeSelectErr;
 
-    let store;
-    if (existingStores.length > 0) {
-      store = existingStores[0];
-    } else {
-      const { data: newStore, error: storeInsertErr } = await supabase
-        .from('stores')
-        .insert({ name: store_name.trim(), chain: store_name.trim() })
-        .select()
-        .single();
-      if (storeInsertErr) throw storeInsertErr;
-      store = newStore;
-    }
+    const store = existingStores.length > 0 ? existingStores[0] : null;
 
     // ── Duplicate receipt check ──────────────────────────────────────────
-    const purchaseTime = time || null;
-    const dedupeTime = purchaseTime || '00:00';
+    let isDuplicate = false;
+    let duplicateReceiptId = null;
 
-    const { data: dupCheck, error: dupErr } = await supabase
-      .from('receipts')
-      .select('id')
-      .eq('store_id', store.id)
-      .eq('purchase_date', date)
-      .eq('total_amount', total)
-      .filter(
-        'purchase_time',
-        purchaseTime ? 'eq' : 'is',
-        purchaseTime ? dedupeTime : null,
-      )
-      .limit(1);
+    if (store) {
+      const purchaseTime = time || null;
 
-    if (dupErr) throw dupErr;
+      let query = supabase
+        .from('receipts')
+        .select('id')
+        .eq('store_id', store.id)
+        .eq('purchase_date', date)
+        .eq('total_with_discount', total_with_discount);
 
-    if (dupCheck.length > 0) {
-      return res.json({
-        is_duplicate: true,
-        existing_receipt_id: dupCheck[0].id,
-        store,
-        parsed,
-      });
-    }
-
-    // ── Upload image to Supabase Storage ─────────────────────────────────
-    const ext =
-      req.file.mimetype === 'application/pdf' ? 'pdf'
-      : req.file.mimetype === 'image/png' ? 'png'
-      : req.file.mimetype === 'image/webp' ? 'webp'
-      : 'jpg';
-    const storagePath = `${store.id}/${date}_${Date.now()}.${ext}`;
-
-    const { error: uploadErr } = await supabase.storage
-      .from('receipts')
-      .upload(storagePath, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: false,
-      });
-
-    const imageUrl = uploadErr ? null : storagePath;
-
-    // ── Insert receipt ───────────────────────────────────────────────────
-    const { data: receipt, error: receiptErr } = await supabase
-      .from('receipts')
-      .insert({
-        store_id: store.id,
-        purchase_date: date,
-        purchase_time: purchaseTime,
-        total_amount: total,
-        image_url: imageUrl,
-        raw_text: rawText,
-      })
-      .select()
-      .single();
-
-    if (receiptErr) throw receiptErr;
-
-    // ── Upsert store_items and build receipt_lines ───────────────────────
-    const receiptLineInserts = [];
-
-    for (const line of lines) {
-      const nameOnReceipt = line.name?.trim();
-      if (!nameOnReceipt) continue;
-
-      const { data: insertedItem, error: itemInsertErr } = await supabase
-        .from('store_items')
-        .insert({
-          store_id: store.id,
-          name_on_receipt: nameOnReceipt,
-          price: line.unit_price,
-          is_discount: line.unit_price < 0,
-          discount_label: line.discount_label || null,
-        })
-        .select()
-        .single();
-
-      let storeItem;
-      let isNew = false;
-
-      if (itemInsertErr) {
-        if (itemInsertErr.code === '23505') {
-          const { data: existing, error: fetchErr } = await supabase
-            .from('store_items')
-            .select('*')
-            .eq('store_id', store.id)
-            .eq('name_on_receipt', nameOnReceipt)
-            .single();
-          if (fetchErr) throw fetchErr;
-          storeItem = existing;
-        } else {
-          throw itemInsertErr;
-        }
+      if (purchaseTime) {
+        query = query.eq('purchase_time', purchaseTime);
       } else {
-        storeItem = insertedItem;
-        isNew = true;
+        query = query.is('purchase_time', null);
       }
 
-      receiptLineInserts.push({
-        receipt_id: receipt.id,
-        store_item_id: storeItem.id,
-        quantity: line.quantity ?? 1,
-        unit_price: line.unit_price,
-        line_total: line.line_total,
-        is_new_store_item: isNew,
-        _store_item: storeItem,
-      });
+      const { data: dupCheck, error: dupErr } = await query.limit(1);
+      if (dupErr) throw dupErr;
+
+      if (dupCheck.length > 0) {
+        isDuplicate = true;
+        duplicateReceiptId = dupCheck[0].id;
+      }
     }
 
-    // ── Insert receipt_lines ─────────────────────────────────────────────
-    const lineRows = receiptLineInserts.map(({ _store_item: _, ...row }) => row);
+    // ── Fetch items_per_store for this store ─────────────────────────────
+    let itemsPerStore = [];
 
-    const { data: insertedLines, error: linesErr } = await supabase
-      .from('receipt_lines')
-      .insert(lineRows)
-      .select();
+    if (store) {
+      const { data: ipsRows, error: ipsErr } = await supabase
+        .from('items_per_store')
+        .select('*, items(id, name, type, subtype)')
+        .eq('store_id', store.id);
 
-    if (linesErr) throw linesErr;
+      if (ipsErr) throw ipsErr;
+      itemsPerStore = ipsRows || [];
+    }
 
-    // ── Build response ───────────────────────────────────────────────────
-    const enrichedLines = insertedLines.map((dbLine, i) => ({
-      ...dbLine,
-      store_item: receiptLineInserts[i]._store_item,
-    }));
-
+    // ── Return parse result + DB context (no writes) ─────────────────────
     return res.json({
-      is_duplicate: false,
-      receipt,
+      parsed,
+      rawText,
       store,
-      lines: enrichedLines,
+      isDuplicate,
+      duplicateReceiptId,
+      itemsPerStore,
     });
   } catch (err) {
-    // Application / DB error — trying another model won't help.
     console.error(`app error after model ${modelName} succeeded:`, err);
     return res.status(500).json({
       error: err.message || 'Internal server error',
