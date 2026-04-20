@@ -18,13 +18,15 @@ const upload = multer({
   },
 });
 
-// Known models — type selects the provider, apiVersion overrides the Gemini default.
+// Known models — type selects the provider. For Gemini, v1beta expects
+// `systemInstruction` (camelCase) while v1 expects `system_instruction`
+// (snake_case); `vision: false` strips image content before sending.
 const MODEL_CONFIG = {
-  'gemini-2.5-flash':              { type: 'gemini', apiVersion: 'v1beta' },
-  'gemini-2.5-flash-lite':         { type: 'gemini', apiVersion: 'v1beta' },
-  'gemini-3-flash-preview':        { type: 'gemini', apiVersion: 'v1' },
-  'gemini-3.1-flash-lite-preview': { type: 'gemini', apiVersion: 'v1' },
-  deepseek:                        { type: 'deepseek' },
+  'gemini-2.5-flash':              { type: 'gemini',   apiVersion: 'v1beta', vision: true },
+  'gemini-2.5-flash-lite':         { type: 'gemini',   apiVersion: 'v1beta', vision: true },
+  'gemini-3-flash-preview':        { type: 'gemini',   apiVersion: 'v1',     vision: true,  systemField: 'system_instruction' },
+  'gemini-3.1-flash-lite-preview': { type: 'gemini',   apiVersion: 'v1',     vision: true,  systemField: 'system_instruction' },
+  deepseek:                        { type: 'deepseek', model: 'deepseek-vl2', vision: true },
 };
 
 // ─── POST /api/parse-receipt?model=<name> ────────────────────────────────────
@@ -47,9 +49,9 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
 
   try {
     if (config.type === 'gemini') {
-      ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, modelName, config.apiVersion));
+      ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, modelName, config));
     } else {
-      ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype));
+      ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype, config));
     }
 
     const { store_name, date, total_with_discount, lines } = parsed;
