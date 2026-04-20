@@ -1,5 +1,3 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
 const SYSTEM_INSTRUCTION = `You are a receipt parser. Analyze the receipt and return ONLY a JSON object with no other text, markdown, or explanation.
 
 The JSON must follow this exact schema:
@@ -44,40 +42,64 @@ Rules:
 - discount_per_item and total_discount default to 0
 - Do not include subtotal, tax, or payment method lines in "lines" — only product lines and discounts`;
 
-/**
- * Parse a receipt image or PDF using Gemini's vision.
- *
- * @param {Buffer} fileBuffer - Raw file bytes
- * @param {string} mimeType   - 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
- * @returns {Promise<{parsed: object, rawText: string}>}
- */
 export { SYSTEM_INSTRUCTION };
 
-export async function parseReceipt(fileBuffer, mimeType, modelName = 'gemini-2.5-flash', apiVersion = 'v1beta') {
+/**
+ * Parse a receipt image or PDF using Gemini's generateContent REST API.
+ *
+ * v1 Gemini models reject the camelCase `systemInstruction` key used by v1beta
+ * and require the snake_case `system_instruction` variant; callers pass the
+ * right name via `systemField`. When `vision` is false the image part is
+ * dropped and only the text instruction is sent.
+ *
+ * @param {Buffer} fileBuffer
+ * @param {string} mimeType
+ * @param {string} modelName
+ * @param {{ apiVersion?: string, systemField?: string, vision?: boolean }} config
+ * @returns {Promise<{parsed: object, rawText: string}>}
+ */
+export async function parseReceipt(fileBuffer, mimeType, modelName, config = {}) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not set — check your .env file');
 
-  const genAI = new GoogleGenerativeAI(key);
-  const model = genAI.getGenerativeModel(
-    { model: modelName, systemInstruction: SYSTEM_INSTRUCTION },
-    { apiVersion },
-  );
+  const apiVersion = config.apiVersion ?? 'v1beta';
+  const systemField = config.systemField ?? 'systemInstruction';
+  const vision = config.vision ?? true;
 
-  const base64 = fileBuffer.toString('base64');
-
-  const result = await model.generateContent([
-    {
+  const parts = [];
+  if (vision) {
+    parts.push({
       inlineData: {
-        data: base64,
+        data: fileBuffer.toString('base64'),
         mimeType,
       },
-    },
-    'Parse this receipt.',
-  ]);
+    });
+  }
+  parts.push({ text: 'Parse this receipt.' });
 
-  const rawText = result.response.text().trim();
+  const body = {
+    [systemField]: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+    contents: [{ role: 'user', parts }],
+  };
 
-  // Strip markdown code fences if Gemini wrapped the JSON
+  const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${modelName}:generateContent?key=${key}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${errBody}`);
+  }
+
+  const data = await response.json();
+  const rawText = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('').trim();
+
+  if (!rawText) throw new Error('Gemini returned empty response');
+
   const jsonText = rawText
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')

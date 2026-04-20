@@ -3,16 +3,27 @@ import { SYSTEM_INSTRUCTION } from './gemini.js';
 /**
  * Parse a receipt image using DeepSeek's OpenAI-compatible API.
  *
- * @param {Buffer} fileBuffer - Raw file bytes
- * @param {string} mimeType   - 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
+ * When `vision` is false the image content block is stripped and only the text
+ * prompt is sent — required for text-only DeepSeek variants that reject
+ * image_url parts outright.
+ *
+ * @param {Buffer} fileBuffer
+ * @param {string} mimeType
+ * @param {{ vision?: boolean, model?: string }} config
  * @returns {Promise<{parsed: object, rawText: string}>}
  */
-export async function parseReceiptDeepseek(fileBuffer, mimeType) {
+export async function parseReceiptDeepseek(fileBuffer, mimeType, config = {}) {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('DEEPSEEK_API_KEY is not set — check your .env file');
 
-  const base64 = fileBuffer.toString('base64');
-  const dataUrl = `data:${mimeType};base64,${base64}`;
+  const vision = config.vision ?? true;
+  const model = config.model ?? 'deepseek-vl2';
+
+  const userContent = [{ type: 'text', text: 'Parse this receipt.' }];
+  if (vision) {
+    const dataUrl = `data:${mimeType};base64,${fileBuffer.toString('base64')}`;
+    userContent.unshift({ type: 'image_url', image_url: { url: dataUrl } });
+  }
 
   const response = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
@@ -21,16 +32,10 @@ export async function parseReceiptDeepseek(fileBuffer, mimeType) {
       Authorization: `Bearer ${key}`,
     },
     body: JSON.stringify({
-      model: 'deepseek-vl2',
+      model,
       messages: [
         { role: 'system', content: SYSTEM_INSTRUCTION },
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: dataUrl } },
-            { type: 'text', text: 'Parse this receipt.' },
-          ],
-        },
+        { role: 'user', content: userContent },
       ],
       temperature: 0,
     }),
@@ -46,7 +51,6 @@ export async function parseReceiptDeepseek(fileBuffer, mimeType) {
 
   if (!rawText) throw new Error('DeepSeek returned empty response');
 
-  // Strip markdown code fences if present
   const jsonText = rawText
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')
