@@ -81,16 +81,14 @@ export default function ReceiptQueue({ files, onDone }) {
   }, [files]);
 
   const advance = (status) => {
+    const nextIndex = currentIndex + 1;
     setOutcomes((prev) => {
       const next = [...prev];
       next[currentIndex] = { status };
       return next;
     });
-    setCurrentIndex((i) => {
-      const nextIndex = i + 1;
-      if (nextIndex >= files.length) setPhase('finished');
-      return nextIndex;
-    });
+    setCurrentIndex(nextIndex);
+    if (nextIndex >= files.length) setPhase('finished');
   };
 
   // ── Parsing phase ───────────────────────────────────────────────────────
@@ -191,6 +189,11 @@ export default function ReceiptQueue({ files, onDone }) {
   }
 
   // ── Reviewing one parsed receipt at a time ──────────────────────────────
+  // Safety net: advance() should have flipped phase to 'finished', but if a
+  // render slips through with currentIndex out of range, render nothing
+  // instead of crashing.
+  if (currentIndex >= files.length) return null;
+
   const current = parseResults[currentIndex];
   const currentFile = files[currentIndex];
   const continueLabel =
