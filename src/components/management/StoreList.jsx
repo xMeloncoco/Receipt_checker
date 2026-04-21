@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useStores } from '../../hooks/useStores.js';
 import Spinner from '../ui/Spinner.jsx';
 
@@ -48,7 +49,9 @@ function EditableRow({ store, onSave, onDelete }) {
             className="border border-gray-300 rounded px-2 py-1 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-indigo-300"
           />
         ) : (
-          store.name
+          <Link to={`/stores/${store.id}`} className="text-indigo-600 hover:underline">
+            {store.name}
+          </Link>
         )}
         {rowError && <p className="text-xs text-red-600 mt-1">{rowError}</p>}
       </td>

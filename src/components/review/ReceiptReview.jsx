@@ -159,6 +159,46 @@ export default function ReceiptReview({
     setEditedFields((prev) => ({ ...prev, [`line.${lineIndex}.${field}`]: true }));
   }, []);
 
+  const handleAddLine = useCallback(() => {
+    setFormData((prev) => ({
+      ...prev,
+      lines: [
+        ...prev.lines,
+        {
+          receipt_line_id: '',
+          name_on_receipt: '',
+          brand: '',
+          amount: '',
+          quantity: '1',
+          price_per_item: '',
+          discount_per_item: '0',
+          total_discount: '0',
+          price_total: '',
+          item_id: null,
+          item_name: '',
+          items_per_store_match_id: null,
+        },
+      ],
+    }));
+  }, []);
+
+  const handleRemoveLine = useCallback((lineIndex) => {
+    setFormData((prev) => ({
+      ...prev,
+      lines: prev.lines.filter((_, i) => i !== lineIndex),
+    }));
+    // Clean up edit markers referencing this index; the remaining index
+    // numbers shift but this only drives field highlighting, so a reset
+    // is fine.
+    setEditedFields((prev) => {
+      const next = {};
+      for (const key of Object.keys(prev)) {
+        if (!key.startsWith(`line.${lineIndex}.`)) next[key] = prev[key];
+      }
+      return next;
+    });
+  }, []);
+
   // ── Field status computation ───────────────────────────────────────────
 
   const getHeaderFieldStatus = useCallback(
@@ -391,6 +431,7 @@ export default function ReceiptReview({
               getOriginalValue={getLineOriginalValue}
               matchInfo={matchResults[i]}
               onOpenMatchSelector={setMatchSelectorIndex}
+              onRemove={handleRemoveLine}
             />
           ))}
           {formData.lines.length === 0 && (
@@ -398,6 +439,13 @@ export default function ReceiptReview({
               No line items parsed.
             </p>
           )}
+          <button
+            type="button"
+            onClick={handleAddLine}
+            className="mt-3 text-sm px-3 py-1.5 rounded border border-dashed border-indigo-300 text-indigo-700 hover:bg-indigo-50 transition-colors"
+          >
+            + Add row
+          </button>
         </div>
 
         <ReviewTotals
