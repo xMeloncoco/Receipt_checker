@@ -1,9 +1,8 @@
-const SYSTEM_INSTRUCTION = `You are a receipt parser. Analyze the receipt and return ONLY a JSON object with no other text, markdown, or explanation.
+const SYSTEM_INSTRUCTION = `You are a receipt parser. You will be shown one or more receipt images. Return ONLY a JSON array with no other text, markdown, or explanation.
 
-The JSON must follow this exact schema:
+Each element of the array is one receipt and must follow this exact schema:
 {
   "store_name": string,
-  "receipt_id": string or null,
   "date": "YYYY-MM-DD",
   "time": "HH:MM or null",
   "total_with_discount": number,
@@ -24,8 +23,9 @@ The JSON must follow this exact schema:
 }
 
 Rules:
+- Always return a JSON array, even when only one receipt image is provided (e.g. [{...}]).
+- Return exactly one element per image, in the same order the images were provided.
 - Keep "name" exactly as printed on the receipt — do not normalize or translate
-- "receipt_id" is the receipt number / transaction number printed on the receipt (null if not visible)
 - "receipt_line_id" is the line number or sequence number printed next to each item (null if not visible)
 - "brand" is the brand name if visible on the line (e.g. "AH Huismerk", "Coca-Cola") — null if not shown
 - "amount" is the weight, volume, or count if visible (e.g. "500g", "1.5L", "3 stuks") — null if not shown
@@ -40,25 +40,17 @@ Rules:
 - All monetary values must be numbers, not strings
 - quantity defaults to 1 if not explicitly shown
 - discount_per_item and total_discount default to 0
-- Do not include subtotal, tax, or payment method lines in "lines" — only product lines and discounts`;
+- Do not include subtotal, tax, or payment method lines in "lines" — only product lines and discounts
+- Do NOT include any receipt number / transaction number — that field is ignored downstream.`;
 
 export { SYSTEM_INSTRUCTION };
 
 /**
- * Parse a receipt image or PDF using Gemini's generateContent REST API.
- *
- * v1 Gemini models reject the camelCase `systemInstruction` key used by v1beta
- * and require the snake_case `system_instruction` variant; callers pass the
- * right name via `systemField`. When `vision` is false the image part is
- * dropped and only the text instruction is sent.
- *
- * @param {Buffer} fileBuffer
- * @param {string} mimeType
- * @param {string} modelName
- * @param {{ apiVersion?: string, systemField?: string, vision?: boolean }} config
- * @returns {Promise<{parsed: object, rawText: string}>}
+ * Parse one or more receipt images/PDFs via Gemini's generateContent REST API.
+ * `files` is an array of { buffer, mimeType }. The model is told to return a
+ * JSON array with one entry per image (see SYSTEM_INSTRUCTION).
  */
-export async function parseReceipt(fileBuffer, mimeType, modelName, config = {}) {
+export async function parseReceipts(files, modelName, config = {}) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not set — check your .env file');
 
@@ -68,14 +60,21 @@ export async function parseReceipt(fileBuffer, mimeType, modelName, config = {})
 
   const parts = [];
   if (vision) {
-    parts.push({
-      inlineData: {
-        data: fileBuffer.toString('base64'),
-        mimeType,
-      },
-    });
+    for (const f of files) {
+      parts.push({
+        inlineData: {
+          data: f.buffer.toString('base64'),
+          mimeType: f.mimeType,
+        },
+      });
+    }
   }
-  parts.push({ text: 'Parse this receipt.' });
+  parts.push({
+    text:
+      files.length === 1
+        ? 'Parse this receipt. Return a JSON array with one element.'
+        : `Parse these ${files.length} receipts. Return a JSON array with ${files.length} elements, one per image in the same order.`,
+  });
 
   const body = {
     [systemField]: { parts: [{ text: SYSTEM_INSTRUCTION }] },
@@ -100,6 +99,11 @@ export async function parseReceipt(fileBuffer, mimeType, modelName, config = {})
 
   if (!rawText) throw new Error('Gemini returned empty response');
 
+  return parseArrayOutput(rawText);
+}
+
+// ── Shared output parser ─────────────────────────────────────────────────────
+export function parseArrayOutput(rawText) {
   const jsonText = rawText
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')
@@ -112,6 +116,16 @@ export async function parseReceipt(fileBuffer, mimeType, modelName, config = {})
     const error = new Error('Model returned non-JSON output');
     error.rawText = rawText;
     throw error;
+  }
+
+  // Accept a single object as a convenience; wrap it.
+  if (!Array.isArray(parsed)) {
+    if (parsed && typeof parsed === 'object') parsed = [parsed];
+    else {
+      const error = new Error('Model returned a non-array, non-object response');
+      error.rawText = rawText;
+      throw error;
+    }
   }
 
   return { parsed, rawText };

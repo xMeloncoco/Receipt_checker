@@ -1,26 +1,26 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReceiptReview from '../review/ReceiptReview.jsx';
 import AttemptBox from './AttemptBox.jsx';
+import ReportModal from './ReportModal.jsx';
 import DuplicateNotice from '../review/DuplicateNotice.jsx';
 import { parseWithFallback } from '../../lib/parseWithFallback.js';
 
 const STATUS_LABEL = {
   saved: { text: 'Saved', classes: 'bg-green-100 text-green-800' },
   duplicate: { text: 'Duplicate — skipped', classes: 'bg-amber-100 text-amber-800' },
-  failed: { text: 'Failed', classes: 'bg-red-100 text-red-800' },
   skipped: { text: 'Skipped', classes: 'bg-gray-100 text-gray-700' },
 };
 
-function QueueSidebar({ files, currentIndex, outcomes }) {
+function QueueSidebar({ files, currentIndex, outcomes, phase }) {
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-2">
       <h3 className="text-sm font-semibold text-gray-700 mb-2">
-        Queue ({currentIndex}/{files.length})
+        Queue ({Math.min(currentIndex, files.length)}/{files.length})
       </h3>
       <ol className="space-y-1">
         {files.map((f, i) => {
           const outcome = outcomes[i];
-          const isCurrent = i === currentIndex;
+          const isCurrent = i === currentIndex && phase === 'reviewing';
           const done = outcome != null;
           const label = outcome ? STATUS_LABEL[outcome.status] : null;
 
@@ -41,7 +41,7 @@ function QueueSidebar({ files, currentIndex, outcomes }) {
               )}
               {isCurrent && !done && (
                 <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 shrink-0">
-                  Processing
+                  Reviewing
                 </span>
               )}
             </li>
@@ -53,78 +53,112 @@ function QueueSidebar({ files, currentIndex, outcomes }) {
 }
 
 export default function ReceiptQueue({ files, onDone }) {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [phase, setPhase] = useState('parsing'); // 'parsing' | 'review' | 'duplicate' | 'failed' | 'finished'
+  // phase: 'parsing' | 'failed' | 'reviewing' | 'finished'
+  const [phase, setPhase] = useState('parsing');
   const [attempts, setAttempts] = useState([]);
-  const [parseResult, setParseResult] = useState(null);
-  const [parseError, setParseError] = useState(null);
+  const [parseResults, setParseResults] = useState([]);
+  const [fatalError, setFatalError] = useState(null);
+  const [showReport, setShowReport] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [outcomes, setOutcomes] = useState(() => files.map(() => null));
-  const parseTokenRef = useRef(0);
+  const startedRef = useRef(false);
 
-  const currentFile = files[currentIndex];
-  const isLast = currentIndex >= files.length;
-
-  // Kick off parsing when index changes
+  // Single parse call for all files (one prompt to the model).
   useEffect(() => {
-    if (isLast) {
-      setPhase('finished');
-      return;
-    }
-
-    const token = ++parseTokenRef.current;
-    setPhase('parsing');
-    setAttempts([]);
-    setParseResult(null);
-    setParseError(null);
+    if (startedRef.current) return;
+    startedRef.current = true;
 
     (async () => {
-      const outcome = await parseWithFallback(files[currentIndex], (a) => {
-        if (parseTokenRef.current !== token) return;
-        setAttempts(a);
-      });
-
-      if (parseTokenRef.current !== token) return;
-
-      if (outcome.result) {
-        setParseResult({ ...outcome.result, file: files[currentIndex] });
-        if (outcome.result.isDuplicate) {
-          setPhase('duplicate');
-        } else {
-          setPhase('review');
-        }
-      } else if (outcome.fatalError) {
-        setParseError(outcome.fatalError);
-        setPhase('failed');
+      const outcome = await parseWithFallback(files, setAttempts);
+      if (outcome.data) {
+        setParseResults(outcome.data.results || []);
+        setPhase('reviewing');
       } else {
-        setParseError('All models failed to process this receipt.');
+        setFatalError(outcome.fatalError || null);
         setPhase('failed');
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, files]);
+  }, [files]);
 
-  const recordOutcome = (status) => {
+  const advance = (status) => {
     setOutcomes((prev) => {
       const next = [...prev];
       next[currentIndex] = { status };
       return next;
     });
+    setCurrentIndex((i) => {
+      const nextIndex = i + 1;
+      if (nextIndex >= files.length) setPhase('finished');
+      return nextIndex;
+    });
   };
 
-  const advance = (status) => {
-    recordOutcome(status);
-    setCurrentIndex((i) => i + 1);
-  };
-
-  // Final summary screen
-  if (phase === 'finished') {
-    const counts = outcomes.reduce(
-      (acc, o) => {
-        if (o) acc[o.status] = (acc[o.status] || 0) + 1;
-        return acc;
-      },
-      {},
+  // ── Parsing phase ───────────────────────────────────────────────────────
+  if (phase === 'parsing') {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-gray-500">
+          Sending {files.length} receipt{files.length > 1 ? 's' : ''} to the AI…
+        </p>
+        {attempts.map((a) => (
+          <AttemptBox key={a.model} attempt={a} />
+        ))}
+      </div>
     );
+  }
+
+  // ── Parsing failed on every model OR fatal app error ────────────────────
+  if (phase === 'failed') {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          {attempts.map((a) => (
+            <AttemptBox key={a.model} attempt={a} />
+          ))}
+        </div>
+
+        {fatalError ? (
+          <div className="bg-red-50 border border-red-200 rounded-xl px-6 py-4 space-y-2">
+            <p className="text-red-700 text-sm font-semibold">
+              The model parsed the images but saving the result failed
+            </p>
+            <p className="text-red-600 text-sm whitespace-pre-wrap">{fatalError}</p>
+          </div>
+        ) : (
+          <div className="text-center space-y-3 py-2">
+            <p className="text-red-700 font-semibold text-sm">
+              All models failed to process the receipts.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowReport(true)}
+              className="inline-flex items-center gap-1 px-4 py-2 rounded-lg border border-red-300 text-red-700 text-sm font-medium hover:bg-red-50 transition-colors"
+            >
+              Report
+            </button>
+          </div>
+        )}
+
+        <button
+          onClick={onDone}
+          className="px-5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors"
+        >
+          Start over
+        </button>
+
+        {showReport && (
+          <ReportModal attempts={attempts} onClose={() => setShowReport(false)} />
+        )}
+      </div>
+    );
+  }
+
+  // ── Finished queue ──────────────────────────────────────────────────────
+  if (phase === 'finished') {
+    const counts = outcomes.reduce((acc, o) => {
+      if (o) acc[o.status] = (acc[o.status] || 0) + 1;
+      return acc;
+    }, {});
     return (
       <div className="flex flex-col items-center justify-center py-16 space-y-6">
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm px-8 py-6 max-w-md w-full text-center">
@@ -136,7 +170,9 @@ export default function ReceiptQueue({ files, onDone }) {
               return (
                 <span
                   key={status}
-                  className={`text-xs px-2 py-0.5 rounded ${lbl?.classes || 'bg-gray-100 text-gray-700'}`}
+                  className={`text-xs px-2 py-0.5 rounded ${
+                    lbl?.classes || 'bg-gray-100 text-gray-700'
+                  }`}
                 >
                   {lbl?.text || status}: {count}
                 </span>
@@ -154,66 +190,40 @@ export default function ReceiptQueue({ files, onDone }) {
     );
   }
 
-  const progressLabel = `Receipt ${currentIndex + 1} of ${files.length} — ${currentFile.name}`;
+  // ── Reviewing one parsed receipt at a time ──────────────────────────────
+  const current = parseResults[currentIndex];
+  const currentFile = files[currentIndex];
+  const continueLabel =
+    currentIndex + 1 < files.length ? 'Continue to next receipt' : 'Finish';
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6 items-start">
       <div className="space-y-4">
-        <p className="text-sm text-gray-500">{progressLabel}</p>
+        <p className="text-sm text-gray-500">
+          Receipt {currentIndex + 1} of {files.length} — {currentFile.name}
+        </p>
 
-        {phase === 'parsing' && (
-          <div className="space-y-2">
-            {attempts.map((a) => (
-              <AttemptBox key={a.model} attempt={a} />
-            ))}
-          </div>
-        )}
-
-        {phase === 'failed' && (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              {attempts.map((a) => (
-                <AttemptBox key={a.model} attempt={a} />
-              ))}
-            </div>
-            <div className="bg-red-50 border border-red-200 rounded-xl px-6 py-4">
-              <p className="text-red-700 text-sm font-semibold mb-2">
-                Could not process this receipt
-              </p>
-              <p className="text-red-600 text-sm">{parseError}</p>
-            </div>
-            <button
-              onClick={() => advance('failed')}
-              className="px-5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors"
-            >
-              {currentIndex + 1 < files.length ? 'Skip to next receipt' : 'Finish'}
-            </button>
-          </div>
-        )}
-
-        {phase === 'duplicate' && parseResult && (
-          <div className="space-y-4">
-            <DuplicateNotice
-              receiptId={parseResult.duplicateReceiptId}
-              onBack={() => advance('duplicate')}
-            />
-          </div>
-        )}
-
-        {phase === 'review' && parseResult && (
+        {current?.isDuplicate ? (
+          <DuplicateNotice
+            receiptId={current.duplicateReceiptId}
+            storeName={current.duplicateStoreName}
+            onBack={() => advance('duplicate')}
+            continueLabel={continueLabel}
+          />
+        ) : current ? (
           <ReceiptReview
             key={currentIndex}
-            parsedData={parseResult.parsed}
-            rawText={parseResult.rawText}
-            file={parseResult.file}
-            store={parseResult.store}
-            itemsPerStore={parseResult.itemsPerStore}
+            parsedData={current.parsed}
+            rawText={null}
+            file={currentFile}
+            store={current.store}
+            itemsPerStore={current.itemsPerStore}
             onReset={() => advance('skipped')}
             onSaved={() => advance('saved')}
-            continueLabel={
-              currentIndex + 1 < files.length ? 'Continue to next receipt' : 'Finish'
-            }
+            continueLabel={continueLabel}
           />
+        ) : (
+          <p className="text-sm text-red-600">No parse result for this file.</p>
         )}
       </div>
 
@@ -221,6 +231,7 @@ export default function ReceiptQueue({ files, onDone }) {
         files={files}
         currentIndex={currentIndex}
         outcomes={outcomes}
+        phase={phase}
       />
     </div>
   );

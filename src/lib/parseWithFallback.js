@@ -1,4 +1,4 @@
-import { parseReceipt } from './api.js';
+import { parseReceipts } from './api.js';
 
 export const MODELS = [
   'gemini-2.5-flash',
@@ -9,11 +9,15 @@ export const MODELS = [
 ];
 
 /**
- * Try each model in order. onAttempt is called for every status change so the
- * caller can render per-model progress. Returns either { result } on success
- * (stops at the first model that works) or { allFailed, attempts, fatalError }.
+ * Send all files in a single call, try each model in order. onAttempt is
+ * invoked with the full attempt list every time a status changes so the caller
+ * can render per-model progress.
+ *
+ * Returns either { data, attempts } on success or { attempts, fatalError? } on
+ * failure. When every model fails, fatalError is unset and the caller should
+ * offer a Report.
  */
-export async function parseWithFallback(file, onAttempt) {
+export async function parseWithFallback(files, onAttempt) {
   const attempts = [];
 
   const updateAttempt = (model, patch) => {
@@ -27,16 +31,16 @@ export async function parseWithFallback(file, onAttempt) {
     updateAttempt(model, { status: 'attempting' });
 
     try {
-      const result = await parseReceipt(file, model);
+      const data = await parseReceipts(files, model);
       updateAttempt(model, { status: 'success' });
-      return { result, attempts: [...attempts] };
+      return { data, attempts: [...attempts] };
     } catch (err) {
       const errorMsg = err.message || 'Unknown error';
 
       if (err.errorType === 'app_error') {
         updateAttempt(model, { status: 'failed', error: errorMsg });
         return {
-          fatalError: `The model parsed the receipt successfully, but an internal error occurred: ${errorMsg}`,
+          fatalError: `The model parsed the receipts successfully, but an internal error occurred: ${errorMsg}`,
           attempts: [...attempts],
         };
       }
@@ -45,5 +49,5 @@ export async function parseWithFallback(file, onAttempt) {
     }
   }
 
-  return { allFailed: true, attempts: [...attempts] };
+  return { attempts: [...attempts] };
 }

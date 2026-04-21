@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { parseReceipt } from '../lib/gemini.js';
-import { parseReceiptDeepseek } from '../lib/deepseek.js';
+import { parseReceipts } from '../lib/gemini.js';
+import { parseReceiptsDeepseek } from '../lib/deepseek.js';
 import supabase from '../lib/supabase-admin.js';
 
 const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
   fileFilter(_req, file, cb) {
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
     if (allowed.includes(file.mimetype)) {
@@ -30,11 +30,13 @@ const MODEL_CONFIG = {
 };
 
 // ─── POST /api/parse-receipt?model=<name> ────────────────────────────────────
-// Parse-only: calls AI, checks for duplicates, looks up items_per_store.
-// Does NOT write anything to the database.
-router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded.' });
+// Accepts N files in a single multipart request (field name "receipt"), sends
+// them all to the chosen model in one call, and returns an array of parse
+// results. Read-only DB lookups (duplicate + items_per_store) happen per
+// returned receipt, cross-store for duplicate detection.
+router.post('/parse-receipt', upload.array('receipt'), async (req, res) => {
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ error: 'No files uploaded.' });
   }
 
   const modelName = req.query.model || 'gemini-2.5-flash';
@@ -44,100 +46,106 @@ router.post('/parse-receipt', upload.single('receipt'), async (req, res) => {
     return res.status(400).json({ error: `Unknown model: ${modelName}` });
   }
 
-  // ── 1. Call the requested model ─────────────────────────────────────────
-  let parsed, rawText;
+  const files = req.files.map((f) => ({ buffer: f.buffer, mimeType: f.mimetype }));
 
+  // ── 1. Call the requested model once with all files ─────────────────────
+  let parsedArray, rawText;
   try {
     if (config.type === 'gemini') {
-      ({ parsed, rawText } = await parseReceipt(req.file.buffer, req.file.mimetype, modelName, config));
+      ({ parsed: parsedArray, rawText } = await parseReceipts(files, modelName, config));
     } else {
-      ({ parsed, rawText } = await parseReceiptDeepseek(req.file.buffer, req.file.mimetype, config));
+      ({ parsed: parsedArray, rawText } = await parseReceiptsDeepseek(files, config));
     }
 
-    const { store_name, date, total_with_discount, lines } = parsed;
-
-    if (!store_name || !date || total_with_discount == null || !Array.isArray(lines)) {
+    if (parsedArray.length !== files.length) {
       return res.status(422).json({
-        error: 'Model returned incomplete data.',
+        error: `Model returned ${parsedArray.length} receipts for ${files.length} images.`,
         errorType: 'model_error',
         rawText,
       });
     }
+
+    for (const parsed of parsedArray) {
+      const { store_name, date, total_with_discount, lines } = parsed;
+      if (!store_name || !date || total_with_discount == null || !Array.isArray(lines)) {
+        return res.status(422).json({
+          error: 'Model returned incomplete data for at least one receipt.',
+          errorType: 'model_error',
+          rawText,
+        });
+      }
+    }
   } catch (err) {
-    // Model / API error — the frontend should try the next model.
     console.error(`model error (${modelName}):`, err);
     return res.status(502).json({
       error: err.message || 'Model request failed',
       errorType: 'model_error',
+      rawText: err.rawText,
     });
   }
 
-  // ── 2. Model succeeded — now do read-only DB lookups ────────────────────
+  // ── 2. For each parsed receipt, run read-only DB lookups ────────────────
   try {
-    const { store_name, date, time, total_with_discount } = parsed;
+    const results = [];
 
-    // ── Look up store (read-only) ────────────────────────────────────────
-    const { data: existingStores, error: storeSelectErr } = await supabase
-      .from('stores')
-      .select('*')
-      .ilike('name', store_name.trim())
-      .limit(1);
+    for (const parsed of parsedArray) {
+      const { store_name, date, time, total_with_discount } = parsed;
 
-    if (storeSelectErr) throw storeSelectErr;
+      // Store lookup (read-only)
+      const { data: existingStores, error: storeSelectErr } = await supabase
+        .from('stores')
+        .select('*')
+        .ilike('name', store_name.trim())
+        .limit(1);
+      if (storeSelectErr) throw storeSelectErr;
+      const store = existingStores.length > 0 ? existingStores[0] : null;
 
-    const store = existingStores.length > 0 ? existingStores[0] : null;
-
-    // ── Duplicate receipt check ──────────────────────────────────────────
-    let isDuplicate = false;
-    let duplicateReceiptId = null;
-
-    if (store) {
+      // Cross-store duplicate check on (date, time, total_with_discount) — so
+      // renaming the store between uploads doesn't sneak a duplicate through.
       const purchaseTime = time || null;
-
-      let query = supabase
+      let dupQuery = supabase
         .from('receipts')
-        .select('id')
-        .eq('store_id', store.id)
+        .select('id, store_id, stores(name)')
         .eq('purchase_date', date)
         .eq('total_with_discount', total_with_discount);
 
-      if (purchaseTime) {
-        query = query.eq('purchase_time', purchaseTime);
-      } else {
-        query = query.is('purchase_time', null);
-      }
+      if (purchaseTime) dupQuery = dupQuery.eq('purchase_time', purchaseTime);
+      else dupQuery = dupQuery.is('purchase_time', null);
 
-      const { data: dupCheck, error: dupErr } = await query.limit(1);
+      const { data: dupRows, error: dupErr } = await dupQuery.limit(1);
       if (dupErr) throw dupErr;
 
-      if (dupCheck.length > 0) {
+      let isDuplicate = false;
+      let duplicateReceiptId = null;
+      let duplicateStoreName = null;
+      if (dupRows.length > 0) {
         isDuplicate = true;
-        duplicateReceiptId = dupCheck[0].id;
+        duplicateReceiptId = dupRows[0].id;
+        duplicateStoreName = dupRows[0].stores?.name || null;
       }
+
+      // items_per_store for this receipt's store (if any)
+      let itemsPerStore = [];
+      if (store) {
+        const { data: ipsRows, error: ipsErr } = await supabase
+          .from('items_per_store')
+          .select('*, items(id, name, type, subtype)')
+          .eq('store_id', store.id);
+        if (ipsErr) throw ipsErr;
+        itemsPerStore = ipsRows || [];
+      }
+
+      results.push({
+        parsed,
+        store,
+        isDuplicate,
+        duplicateReceiptId,
+        duplicateStoreName,
+        itemsPerStore,
+      });
     }
 
-    // ── Fetch items_per_store for this store ─────────────────────────────
-    let itemsPerStore = [];
-
-    if (store) {
-      const { data: ipsRows, error: ipsErr } = await supabase
-        .from('items_per_store')
-        .select('*, items(id, name, type, subtype)')
-        .eq('store_id', store.id);
-
-      if (ipsErr) throw ipsErr;
-      itemsPerStore = ipsRows || [];
-    }
-
-    // ── Return parse result + DB context (no writes) ─────────────────────
-    return res.json({
-      parsed,
-      rawText,
-      store,
-      isDuplicate,
-      duplicateReceiptId,
-      itemsPerStore,
-    });
+    return res.json({ results, rawText });
   } catch (err) {
     console.error(`app error after model ${modelName} succeeded:`, err);
     return res.status(500).json({

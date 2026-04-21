@@ -1,23 +1,21 @@
 /**
- * Send a receipt file to the backend for parsing with a specific model.
- * Parse-only — does NOT save to the database.
+ * Send one or more receipt files to the backend for parsing in a single call.
+ * The backend asks the AI to parse all images in one prompt and returns an
+ * array of results (one per file, in the same order).
  *
- * @param {File}   file  - The receipt image / PDF
+ * @param {File[]} files - Receipt images / PDFs
  * @param {string} model - Model name to try (e.g. 'gemini-2.5-flash')
- * @returns {Promise<object>} Parse result: { parsed, rawText, store, isDuplicate, duplicateReceiptId, itemsPerStore }
+ * @returns {Promise<{results: Array, rawText: string}>}
  */
-export async function parseReceipt(file, model) {
+export async function parseReceipts(files, model) {
   const form = new FormData();
-  form.append('receipt', file);
+  for (const f of files) form.append('receipt', f);
 
   const url = model
     ? `/api/parse-receipt?model=${encodeURIComponent(model)}`
     : '/api/parse-receipt';
 
-  const res = await fetch(url, {
-    method: 'POST',
-    body: form,
-  });
+  const res = await fetch(url, { method: 'POST', body: form });
 
   const text = await res.text();
   let data;
@@ -39,22 +37,13 @@ export async function parseReceipt(file, model) {
 
 /**
  * Save reviewed receipt data to the database.
- *
- * @param {object} data - The reviewed receipt data (store_name, lines, totals, etc.)
- * @param {File}   file - The receipt image / PDF file
- * @returns {Promise<object>} Save result: { success, receipt, store, lines }
  */
 export async function saveReceipt(data, file) {
   const form = new FormData();
   form.append('data', JSON.stringify(data));
-  if (file) {
-    form.append('receipt', file);
-  }
+  if (file) form.append('receipt', file);
 
-  const res = await fetch('/api/save-receipt', {
-    method: 'POST',
-    body: form,
-  });
+  const res = await fetch('/api/save-receipt', { method: 'POST', body: form });
 
   const text = await res.text();
   let result;
@@ -65,7 +54,11 @@ export async function saveReceipt(data, file) {
   }
 
   if (!res.ok) {
-    throw new Error(result.error || `Server error ${res.status}`);
+    const err = new Error(result.error || `Server error ${res.status}`);
+    err.errorType = result.errorType;
+    err.duplicateReceiptId = result.duplicateReceiptId;
+    err.duplicateStoreName = result.duplicateStoreName;
+    throw err;
   }
 
   return result;
@@ -74,9 +67,6 @@ export async function saveReceipt(data, file) {
 /**
  * Re-check items_per_store for a given store name.
  * Used after editing fields to re-compare against DB.
- *
- * @param {string} storeName - The store name to look up
- * @returns {Promise<object>} { store, itemsPerStore }
  */
 export async function checkItemsPerStore(storeName) {
   const res = await fetch('/api/check-items-per-store', {
@@ -93,9 +83,7 @@ export async function checkItemsPerStore(storeName) {
     throw new Error(`Server error ${res.status}: ${text || '(empty response)'}`);
   }
 
-  if (!res.ok) {
-    throw new Error(data.error || `Server error ${res.status}`);
-  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
 
   return data;
 }

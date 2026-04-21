@@ -20,7 +20,7 @@ export default function ReviewHeader({
         />
       </div>
 
-      {/* Date, Time, Receipt ID */}
+      {/* Date, Time */}
       <div className="flex flex-wrap gap-4 justify-center text-sm">
         <div className="flex items-center gap-1">
           <span className="text-gray-500">Date:</span>
@@ -41,17 +41,6 @@ export default function ReviewHeader({
             status={getFieldStatus('purchase_time')}
             originalValue={getOriginalValue('purchase_time')}
             placeholder="HH:MM"
-            small
-          />
-        </div>
-        <div className="flex items-center gap-1">
-          <span className="text-gray-500">Receipt #:</span>
-          <EditableField
-            value={formData.receipt_id}
-            onChange={(v) => onFieldChange('receipt_id', v)}
-            status={getFieldStatus('receipt_id')}
-            originalValue={getOriginalValue('receipt_id')}
-            placeholder="—"
             small
           />
         </div>
