@@ -12,7 +12,6 @@ import { saveReceipt, checkItemsPerStore } from '../../lib/api.js';
 function buildInitialFormData(parsed) {
   return {
     store_name: parsed.store_name || '',
-    receipt_id: parsed.receipt_id || '',
     purchase_date: parsed.date || '',
     purchase_time: parsed.time || '',
     total_with_discount: parsed.total_with_discount != null ? String(parsed.total_with_discount) : '',
@@ -269,7 +268,6 @@ export default function ReceiptReview({
     try {
       const payload = {
         store_name: formData.store_name,
-        receipt_id: formData.receipt_id || null,
         purchase_date: formData.purchase_date,
         purchase_time: formData.purchase_time || null,
         total_with_discount: Number(formData.total_with_discount),
@@ -294,7 +292,16 @@ export default function ReceiptReview({
       await saveReceipt(payload, file);
       setSaveSuccess(true);
     } catch (err) {
-      setError(err.message);
+      if (err.errorType === 'duplicate') {
+        const where = err.duplicateStoreName
+          ? ` (originally saved under store "${err.duplicateStoreName}")`
+          : '';
+        setError(
+          `${err.message}${where}. This receipt is already in the database.`,
+        );
+      } else {
+        setError(err.message);
+      }
     } finally {
       setSaving(false);
     }

@@ -214,7 +214,6 @@ export default function ReceiptDetailPage() {
 
   const startHeaderEdit = () => {
     setHeaderDraft({
-      receipt_id: receipt.receipt_id || '',
       purchase_date: receipt.purchase_date || '',
       purchase_time: receipt.purchase_time || '',
       total_with_discount: receipt.total_with_discount ?? '',
@@ -228,7 +227,6 @@ export default function ReceiptDetailPage() {
     setHeaderError(null);
     try {
       await updateReceipt({
-        receipt_id: headerDraft.receipt_id || null,
         purchase_date: headerDraft.purchase_date,
         purchase_time: headerDraft.purchase_time || null,
         total_with_discount: Number(headerDraft.total_with_discount),
@@ -320,19 +318,6 @@ export default function ReceiptDetailPage() {
             <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
               <dt className="text-gray-500">Store</dt>
               <dd className="text-gray-800">{receipt.stores?.name || '—'}</dd>
-
-              <dt className="text-gray-500">Receipt #</dt>
-              <dd>
-                {headerEditing ? (
-                  <TextInput
-                    value={headerDraft.receipt_id}
-                    onChange={(v) => setHeaderDraft((d) => ({ ...d, receipt_id: v }))}
-                    width="w-40"
-                  />
-                ) : (
-                  receipt.receipt_id || '—'
-                )}
-              </dd>
 
               <dt className="text-gray-500">Date</dt>
               <dd>

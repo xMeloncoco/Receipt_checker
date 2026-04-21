@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
 import supabase from '../lib/supabase-admin.js';
 
 const router = Router();
@@ -24,7 +25,6 @@ router.post('/save-receipt', upload.single('receipt'), async (req, res) => {
     const data = JSON.parse(req.body.data);
     const {
       store_name,
-      receipt_id,
       purchase_date,
       purchase_time,
       total_with_discount,
@@ -35,6 +35,29 @@ router.post('/save-receipt', upload.single('receipt'), async (req, res) => {
 
     if (!store_name || !purchase_date || total_with_discount == null || !Array.isArray(lines)) {
       return res.status(400).json({ error: 'Missing required fields.' });
+    }
+
+    // Cross-store duplicate check: the same purchase (date/time/total) must not
+    // be saved twice even if the user edited the store name between uploads.
+    {
+      let dupQuery = supabase
+        .from('receipts')
+        .select('id, stores(name)')
+        .eq('purchase_date', purchase_date)
+        .eq('total_with_discount', total_with_discount);
+      if (purchase_time) dupQuery = dupQuery.eq('purchase_time', purchase_time);
+      else dupQuery = dupQuery.is('purchase_time', null);
+
+      const { data: dupRows, error: dupErr } = await dupQuery.limit(1);
+      if (dupErr) throw dupErr;
+      if (dupRows.length > 0) {
+        return res.status(409).json({
+          error: 'A receipt with the same date, time, and total already exists.',
+          errorType: 'duplicate',
+          duplicateReceiptId: dupRows[0].id,
+          duplicateStoreName: dupRows[0].stores?.name || null,
+        });
+      }
     }
 
     // ── 1. Upsert store ─────────────────────────────────────────────────
@@ -87,10 +110,13 @@ router.post('/save-receipt', upload.single('receipt'), async (req, res) => {
     // Use a placeholder until real auth is implemented.
     const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000';
 
+    // receipt_id is a free-form identifier kept alongside the DB UUID; we
+    // always generate a random one server-side instead of trusting the value
+    // printed on the receipt (or anything the client supplies).
     const { data: receipt, error: receiptErr } = await supabase
       .from('receipts')
       .insert({
-        receipt_id: receipt_id || null,
+        receipt_id: crypto.randomUUID(),
         store_id: store.id,
         user_id: PLACEHOLDER_USER_ID,
         purchase_date,

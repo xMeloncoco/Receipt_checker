@@ -27,7 +27,7 @@ export default function HistoryPage() {
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Store', 'Date', 'Time', 'Receipt #', 'Total', 'Uploaded', ''].map((h) => (
+                    {['Store', 'Date', 'Time', 'Total', 'Uploaded', ''].map((h) => (
                       <th
                         key={h}
                         className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap"
@@ -43,7 +43,6 @@ export default function HistoryPage() {
                       <td className="px-4 py-2 text-gray-700">{row.stores?.name ?? '—'}</td>
                       <td className="px-4 py-2 text-gray-700">{row.purchase_date}</td>
                       <td className="px-4 py-2 text-gray-700">{row.purchase_time ?? '—'}</td>
-                      <td className="px-4 py-2 text-gray-700">{row.receipt_id ?? '—'}</td>
                       <td className="px-4 py-2 text-gray-700">
                         €{Number(row.total_with_discount).toFixed(2)}
                       </td>
