@@ -3,6 +3,7 @@ import ReviewHeader from './ReviewHeader.jsx';
 import ReviewLine from './ReviewLine.jsx';
 import ReviewTotals from './ReviewTotals.jsx';
 import MatchSelector from './MatchSelector.jsx';
+import ZoomableImage from './ZoomableImage.jsx';
 import Spinner from '../ui/Spinner.jsx';
 import { saveReceipt, checkItemsPerStore } from '../../lib/api.js';
 
@@ -100,6 +101,8 @@ export default function ReceiptReview({
   store,
   itemsPerStore: initialItemsPerStore,
   onReset,
+  onSaved,
+  continueLabel = 'Upload Another Receipt',
 }) {
   const [formData, setFormData] = useState(() => buildInitialFormData(parsedData));
   const [editedFields, setEditedFields] = useState({});
@@ -283,6 +286,7 @@ export default function ReceiptReview({
           total_discount: Number(l.total_discount) || 0,
           price_total: l.price_total !== '' ? Number(l.price_total) : null,
           item_id: l.item_id || null,
+          item_name: l.item_name || null,
           items_per_store_match_id: l.items_per_store_match_id || null,
         })),
       };
@@ -311,10 +315,10 @@ export default function ReceiptReview({
           </p>
         </div>
         <button
-          onClick={onReset}
+          onClick={onSaved || onReset}
           className="px-6 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors"
         >
-          Upload Another Receipt
+          {continueLabel}
         </button>
       </div>
     );
@@ -328,11 +332,7 @@ export default function ReceiptReview({
       <div className="w-2/5 sticky top-4 shrink-0">
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           {previewUrl ? (
-            <img
-              src={previewUrl}
-              alt="Receipt"
-              className="w-full object-contain max-h-[85vh]"
-            />
+            <ZoomableImage src={previewUrl} alt="Receipt" />
           ) : file?.type === 'application/pdf' ? (
             <div className="flex flex-col items-center justify-center py-20 text-gray-400">
               <div className="text-5xl mb-2">&#128196;</div>

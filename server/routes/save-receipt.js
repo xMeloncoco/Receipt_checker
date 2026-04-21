@@ -112,13 +112,48 @@ router.post('/save-receipt', upload.single('receipt'), async (req, res) => {
       const nameOnReceipt = line.name_on_receipt?.trim();
       if (!nameOnReceipt) continue;
 
+      // Resolve item_id: if an item_name was typed but no item_id is set,
+      // look it up (case-insensitive) and insert a fresh items row when
+      // missing so the canonical catalogue grows from reviewed receipts.
+      let itemId = line.item_id || null;
+      const itemName = line.item_name?.trim();
+      if (!itemId && itemName) {
+        const { data: existingItems, error: itemLookupErr } = await supabase
+          .from('items')
+          .select('id')
+          .ilike('name', itemName)
+          .limit(1);
+        if (itemLookupErr) throw itemLookupErr;
+
+        if (existingItems.length > 0) {
+          itemId = existingItems[0].id;
+        } else {
+          const { data: newItem, error: itemInsertErr } = await supabase
+            .from('items')
+            .insert({ name: itemName })
+            .select('id')
+            .single();
+          if (itemInsertErr && itemInsertErr.code !== '23505') throw itemInsertErr;
+          if (newItem) itemId = newItem.id;
+          else {
+            // Another concurrent insert won the race — re-select
+            const { data: raceItems } = await supabase
+              .from('items')
+              .select('id')
+              .ilike('name', itemName)
+              .limit(1);
+            if (raceItems?.length > 0) itemId = raceItems[0].id;
+          }
+        }
+      }
+
       // Insert receipt_line
       const { data: receiptLine, error: lineErr } = await supabase
         .from('receipt_lines')
         .insert({
           receipt_id: receipt.id,
           receipt_line_id: line.receipt_line_id || null,
-          item_id: line.item_id || null,
+          item_id: itemId,
           name_on_receipt: nameOnReceipt,
           brand: line.brand || null,
           amount: line.amount || null,
@@ -144,7 +179,7 @@ router.post('/save-receipt', upload.single('receipt'), async (req, res) => {
               price: line.price_per_item,
               brand: line.brand || null,
               amount: line.amount || null,
-              item_id: line.item_id || null,
+              item_id: itemId,
               latest_update_date: purchase_date,
               latest_update_receipt_line_id: receiptLine.id,
             })
@@ -157,7 +192,7 @@ router.post('/save-receipt', upload.single('receipt'), async (req, res) => {
             .from('items_per_store')
             .insert({
               store_id: store.id,
-              item_id: line.item_id || null,
+              item_id: itemId,
               name_on_receipt: nameOnReceipt,
               brand: line.brand || null,
               amount: line.amount || null,

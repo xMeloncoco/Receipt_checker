@@ -1,370 +1,132 @@
 import { useState, useRef, useCallback } from 'react';
-import { parseReceipt } from '../../lib/api.js';
-import Spinner from '../ui/Spinner.jsx';
 
 const ACCEPTED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 const ACCEPTED_EXT = '.jpg,.jpeg,.png,.webp,.pdf';
 
-// Ordered fallback chain — frontend drives the loop so each attempt renders.
-const MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-3-flash-preview',
-  'gemini-3.1-flash-lite-preview',
-  'deepseek',
-];
-
-// ─── Error categorisation ────────────────────────────────────────────────────
-function categoriseError(error) {
-  if (!error) return 'unknown';
-  if (error.includes('429') && error.toLowerCase().includes('too many requests'))
-    return 'limit';
-  if (
-    error.includes('high demand') &&
-    error.toLowerCase().includes('temporary')
-  )
-    return 'busy';
-  return 'unknown';
-}
-
-function ErrorLabel({ error }) {
-  const cat = categoriseError(error);
-  const [expanded, setExpanded] = useState(false);
-
-  if (cat === 'limit') return <span className="text-red-600 text-sm">Max limit reached</span>;
-  if (cat === 'busy') return <span className="text-red-600 text-sm">Model busy</span>;
-
-  return (
-    <span className="text-red-600 text-sm">
-      Unknown reason
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="ml-2 text-xs text-red-400 underline hover:text-red-600"
-      >
-        {expanded ? 'hide' : 'details'}
-      </button>
-      {expanded && (
-        <span className="block mt-1 text-xs text-red-400 whitespace-pre-wrap break-all">
-          {error}
-        </span>
-      )}
-    </span>
-  );
-}
-
-// ─── Single attempt row ──────────────────────────────────────────────────────
-function AttemptBox({ attempt }) {
-  if (attempt.status === 'attempting') {
-    return (
-      <div className="flex items-center gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
-        <Spinner size="sm" className="text-blue-500" />
-        <span className="text-sm text-blue-700">
-          Sending image to <strong>{attempt.model}</strong>
-        </span>
-      </div>
-    );
-  }
-
-  if (attempt.status === 'failed') {
-    return (
-      <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
-        <div className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
-          <span className="font-semibold text-sm text-red-700">{attempt.model}</span>
-          <span className="text-red-300">—</span>
-          <ErrorLabel error={attempt.error} />
-        </div>
-      </div>
-    );
-  }
-
-  if (attempt.status === 'success') {
-    return (
-      <div className="px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
-        <div className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0" />
-          <span className="font-semibold text-sm text-green-700">{attempt.model}</span>
-          <span className="text-green-300">—</span>
-          <span className="text-green-600 text-sm">Success</span>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-// ─── Report modal ────────────────────────────────────────────────────────────
-function ReportModal({ attempts, onClose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl shadow-xl p-6 max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto">
-        <h3 className="text-lg font-bold text-gray-900 mb-4">Model Failure Report</h3>
-        <div className="space-y-3">
-          {attempts.map((a) => (
-            <div key={a.model} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-              <p className="font-semibold text-sm text-gray-800">{a.model}</p>
-              <p className="mt-1 text-xs text-gray-500 whitespace-pre-wrap break-all">
-                {a.error}
-              </p>
-            </div>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-5 w-full py-2 px-4 rounded-lg bg-gray-800 text-white text-sm font-medium hover:bg-gray-700 transition-colors"
-        >
-          Close
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main component ──────────────────────────────────────────────────────────
-export default function UploadZone({ onResult }) {
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
-  const [processing, setProcessing] = useState(false);
-  const [attempts, setAttempts] = useState([]);
-  const [allFailed, setAllFailed] = useState(false);
-  const [processResult, setProcessResult] = useState(null);
-  const [fatalError, setFatalError] = useState(null);
+export default function UploadZone({ onFiles }) {
+  const [files, setFiles] = useState([]);
   const [dragging, setDragging] = useState(false);
-  const [showReport, setShowReport] = useState(false);
+  const [error, setError] = useState(null);
   const inputRef = useRef(null);
 
-  const handleFile = useCallback((f) => {
-    if (!f) return;
-    if (!ACCEPTED_MIME.includes(f.type)) {
-      setFatalError('Unsupported file type. Please upload a JPEG, PNG, WebP, or PDF.');
-      return;
+  const addFiles = useCallback((incoming) => {
+    const accepted = [];
+    const rejected = [];
+    for (const f of incoming) {
+      if (ACCEPTED_MIME.includes(f.type)) accepted.push(f);
+      else rejected.push(f.name);
     }
-    setFatalError(null);
-    setFile(f);
-    if (f.type.startsWith('image/')) {
-      setPreview(URL.createObjectURL(f));
-    } else {
-      setPreview(null);
-    }
+    setError(
+      rejected.length > 0
+        ? `Skipped unsupported file(s): ${rejected.join(', ')}`
+        : null,
+    );
+    setFiles((prev) => [...prev, ...accepted]);
   }, []);
 
   const onDrop = useCallback(
     (e) => {
       e.preventDefault();
       setDragging(false);
-      handleFile(e.dataTransfer.files[0]);
+      addFiles(Array.from(e.dataTransfer.files || []));
     },
-    [handleFile],
+    [addFiles],
   );
 
-  const onDragOver = (e) => {
-    e.preventDefault();
-    setDragging(true);
-  };
-  const onDragLeave = () => setDragging(false);
-  const onInputChange = (e) => handleFile(e.target.files[0]);
-
-  // ── Process receipt — try each model one-by-one ───────────────────────────
-  const handleSubmit = async () => {
-    if (!file) return;
-    setProcessing(true);
-    setAttempts([]);
-    setAllFailed(false);
-    setProcessResult(null);
-    setFatalError(null);
-
-    for (const model of MODELS) {
-      // Show the "Sending image to …" row — React renders before the await.
-      setAttempts((prev) => [...prev, { model, status: 'attempting' }]);
-
-      try {
-        const result = await parseReceipt(file, model);
-
-        // Mark success & store result
-        setAttempts((prev) =>
-          prev.map((a) => (a.model === model ? { ...a, status: 'success' } : a)),
-        );
-        setProcessResult(result);
-        setProcessing(false);
-        return; // done — don't try remaining models
-      } catch (err) {
-        const errorMsg = err.message || 'Unknown error';
-
-        // App / DB error — the model succeeded but post-processing failed.
-        // Trying another model won't help, so stop the loop.
-        if (err.errorType === 'app_error') {
-          setAttempts((prev) =>
-            prev.map((a) =>
-              a.model === model
-                ? { ...a, status: 'failed', error: errorMsg }
-                : a,
-            ),
-          );
-          setFatalError(
-            `The model parsed the receipt successfully, but an internal error occurred: ${errorMsg}`,
-          );
-          setProcessing(false);
-          return;
-        }
-
-        // Model / API error — continue to the next model.
-        setAttempts((prev) =>
-          prev.map((a) =>
-            a.model === model
-              ? { ...a, status: 'failed', error: errorMsg }
-              : a,
-          ),
-        );
-      }
-    }
-
-    // Every model failed
-    setAllFailed(true);
-    setProcessing(false);
-  };
-
-  const reset = () => {
-    setFile(null);
-    setPreview(null);
-    setFatalError(null);
-    setAttempts([]);
-    setAllFailed(false);
-    setProcessResult(null);
+  const onInputChange = (e) => {
+    addFiles(Array.from(e.target.files || []));
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  const hasStarted = attempts.length > 0;
-  const succeeded = processResult !== null;
+  const removeAt = (idx) => {
+    setFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleStart = () => {
+    if (files.length === 0) return;
+    onFiles(files);
+  };
 
   return (
     <div className="space-y-4">
-      {/* ── Drop zone ──────────────────────────────────────────────────────── */}
       <div
         onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onClick={() => !file && inputRef.current?.click()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onClick={() => inputRef.current?.click()}
         className={`relative border-2 border-dashed rounded-xl p-10 text-center transition-colors cursor-pointer
-          ${dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-300 hover:border-indigo-300 hover:bg-gray-50'}
-          ${file ? 'cursor-default' : ''}`}
+          ${dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-300 hover:border-indigo-300 hover:bg-gray-50'}`}
       >
         <input
           ref={inputRef}
           type="file"
+          multiple
           accept={ACCEPTED_EXT}
           onChange={onInputChange}
           className="hidden"
         />
+        <div className="space-y-2">
+          <div className="text-4xl">&#128196;</div>
+          <p className="text-gray-600 font-medium">
+            Drop your receipts here or click to browse
+          </p>
+          <p className="text-gray-400 text-sm">
+            JPEG, PNG, WebP or PDF — up to 10 MB each. Multiple files allowed.
+          </p>
+        </div>
+      </div>
 
-        {!file && (
-          <div className="space-y-2">
-            <div className="text-4xl">📄</div>
-            <p className="text-gray-600 font-medium">Drop your receipt here or click to browse</p>
-            <p className="text-gray-400 text-sm">JPEG, PNG, WebP or PDF — max 10 MB</p>
-          </div>
-        )}
+      {error && (
+        <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded px-4 py-2">
+          {error}
+        </p>
+      )}
 
-        {file && (
-          <div className="flex flex-col items-center gap-3">
-            {preview ? (
-              <img
-                src={preview}
-                alt="Receipt preview"
-                className="max-h-64 rounded shadow object-contain"
-              />
-            ) : (
-              <div className="text-5xl">📄</div>
-            )}
-            <p className="text-gray-700 font-medium text-sm">{file.name}</p>
-            {!processing && !succeeded && (
+      {files.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
+          {files.map((f, i) => (
+            <div
+              key={`${f.name}-${i}`}
+              className="flex items-center justify-between gap-3 px-4 py-2"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="text-xl shrink-0">
+                  {f.type === 'application/pdf' ? '\u{1F4C4}' : '\u{1F5BC}'}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-800 truncate">{f.name}</p>
+                  <p className="text-xs text-gray-400">
+                    {(f.size / 1024).toFixed(1)} KB
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  reset();
-                }}
-                className="text-xs text-red-500 hover:underline"
+                onClick={() => removeAt(i)}
+                className="text-xs text-red-500 hover:underline shrink-0"
               >
                 Remove
               </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Model attempt status boxes ─────────────────────────────────────── */}
-      {hasStarted && (
-        <div className="space-y-2">
-          {attempts.map((attempt) => (
-            <AttemptBox key={attempt.model} attempt={attempt} />
+            </div>
           ))}
         </div>
       )}
 
-      {/* ── All models failed ──────────────────────────────────────────────── */}
-      {allFailed && (
-        <div className="text-center space-y-3 py-2">
-          <p className="text-red-700 font-semibold text-sm">
-            All models failed to process the receipt.
-          </p>
-          <button
-            type="button"
-            onClick={() => setShowReport(true)}
-            className="inline-flex items-center gap-1 px-4 py-2 rounded-lg border border-red-300 text-red-700 text-sm font-medium hover:bg-red-50 transition-colors"
-          >
-            Report
-          </button>
-        </div>
-      )}
-
-      {/* ── Fatal / DB error ───────────────────────────────────────────────── */}
-      {fatalError && (
-        <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded px-4 py-2">
-          {fatalError}
-        </p>
-      )}
-
-      {/* ── Action button ──────────────────────────────────────────────────── */}
-      {succeeded ? (
-        <button
-          type="button"
-          onClick={() => onResult({ ...processResult, file })}
-          className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-lg
-            bg-green-600 text-white font-semibold text-sm
-            hover:bg-green-700 transition-colors"
-        >
-          Check Receipt
-        </button>
-      ) : (
-        <button
-          type="button"
-          disabled={!file || processing}
-          onClick={handleSubmit}
-          className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-lg
-            bg-indigo-600 text-white font-semibold text-sm
-            hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {processing ? (
-            <>
-              <Spinner size="sm" className="text-white" />
-              Processing…
-            </>
-          ) : (
-            'Process Receipt'
-          )}
-        </button>
-      )}
-
-      {/* ── Report modal ───────────────────────────────────────────────────── */}
-      {showReport && (
-        <ReportModal
-          attempts={attempts.filter((a) => a.status === 'failed')}
-          onClose={() => setShowReport(false)}
-        />
-      )}
+      <button
+        type="button"
+        disabled={files.length === 0}
+        onClick={handleStart}
+        className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-lg
+          bg-indigo-600 text-white font-semibold text-sm
+          hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {files.length === 0
+          ? 'Select at least one receipt'
+          : `Process ${files.length} receipt${files.length > 1 ? 's' : ''}`}
+      </button>
     </div>
   );
 }

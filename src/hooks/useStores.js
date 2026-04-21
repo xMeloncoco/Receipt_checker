@@ -30,9 +30,29 @@ export function useStores() {
       .select()
       .single();
     if (err) throw err;
-    setData(prev => [...prev, row].sort((a, b) => a.name.localeCompare(b.name)));
+    setData((prev) => [...prev, row].sort((a, b) => a.name.localeCompare(b.name)));
     return row;
   }, []);
 
-  return { data, loading, error, refetch: fetch, addStore };
+  const updateStore = useCallback(async (id, patch) => {
+    const { data: row, error: err } = await supabase
+      .from('stores')
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+    if (err) throw err;
+    setData((prev) =>
+      prev.map((s) => (s.id === id ? row : s)).sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    return row;
+  }, []);
+
+  const deleteStore = useCallback(async (id) => {
+    const { error: err } = await supabase.from('stores').delete().eq('id', id);
+    if (err) throw err;
+    setData((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  return { data, loading, error, refetch: fetch, addStore, updateStore, deleteStore };
 }
