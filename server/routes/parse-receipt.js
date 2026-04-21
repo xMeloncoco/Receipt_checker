@@ -18,15 +18,15 @@ const upload = multer({
   },
 });
 
-// Known models — type selects the provider. For Gemini, v1beta expects
-// `systemInstruction` (camelCase) while v1 expects `system_instruction`
-// (snake_case); `vision: false` strips image content before sending.
+// Known models — type selects the provider. For Gemini, both v1 and v1beta
+// accept the camelCase `systemInstruction` field. The previous v1 preview
+// configs used snake_case, which the API rejects.
 const MODEL_CONFIG = {
   'gemini-2.5-flash':              { type: 'gemini',   apiVersion: 'v1beta', vision: true },
   'gemini-2.5-flash-lite':         { type: 'gemini',   apiVersion: 'v1beta', vision: true },
-  'gemini-3-flash-preview':        { type: 'gemini',   apiVersion: 'v1',     vision: true,  systemField: 'system_instruction' },
-  'gemini-3.1-flash-lite-preview': { type: 'gemini',   apiVersion: 'v1',     vision: true,  systemField: 'system_instruction' },
-  deepseek:                        { type: 'deepseek', model: 'deepseek-vl2', vision: true },
+  'gemini-3-flash-preview':        { type: 'gemini',   apiVersion: 'v1',     vision: true },
+  'gemini-3.1-flash-lite-preview': { type: 'gemini',   apiVersion: 'v1',     vision: true },
+  deepseek:                        { type: 'deepseek', vision: true },
 };
 
 // ─── POST /api/parse-receipt?model=<name> ────────────────────────────────────

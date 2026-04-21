@@ -1,15 +1,27 @@
 import { SYSTEM_INSTRUCTION, parseArrayOutput } from './gemini.js';
 
 /**
- * Parse one or more receipt images via DeepSeek's OpenAI-compatible API.
- * `files` is an array of { buffer, mimeType }.
+ * Parse one or more receipt images via an OpenAI-compatible chat endpoint.
+ *
+ * DeepSeek's own `api.deepseek.com/chat/completions` only accepts text
+ * parts — it returns 400 "unknown variant image_url" when images are
+ * attached.  To get a DeepSeek model that accepts images we route through
+ * an OpenAI-compatible host (OpenRouter by default) that proxies to
+ * `deepseek-vl2`.
+ *
+ * All three pieces are env-configurable so you can swap provider without a
+ * code change:
+ *   DEEPSEEK_BASE_URL  (default: https://openrouter.ai/api/v1)
+ *   DEEPSEEK_API_KEY   (required)
+ *   DEEPSEEK_MODEL     (default: deepseek/deepseek-vl2)
  */
 export async function parseReceiptsDeepseek(files, config = {}) {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('DEEPSEEK_API_KEY is not set — check your .env file');
 
+  const baseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+  const model = config.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek/deepseek-vl2';
   const vision = config.vision ?? true;
-  const model = config.model ?? 'deepseek-vl2';
 
   const userContent = [];
   if (vision) {
@@ -26,12 +38,20 @@ export async function parseReceiptsDeepseek(files, config = {}) {
         : `Parse these ${files.length} receipts. Return a JSON array with ${files.length} elements, one per image in the same order.`,
   });
 
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+  };
+  // OpenRouter recommends (but does not require) these attribution
+  // headers.  Harmless on other providers.
+  if (baseUrl.includes('openrouter.ai')) {
+    headers['HTTP-Referer'] = process.env.OPENROUTER_REFERER || 'https://github.com/xMeloncoco/Receipt_checker';
+    headers['X-Title'] = 'Receipt Checker';
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages: [
