@@ -3,6 +3,7 @@ import Navbar from './components/layout/Navbar.jsx';
 import PageWrapper from './components/layout/PageWrapper.jsx';
 import UploadPage from './pages/UploadPage.jsx';
 import HistoryPage from './pages/HistoryPage.jsx';
+import ReceiptDetailPage from './pages/ReceiptDetailPage.jsx';
 import StoresPage from './pages/StoresPage.jsx';
 import ItemsPage from './pages/ItemsPage.jsx';
 
@@ -16,6 +17,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/upload" replace />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/history" element={<HistoryPage />} />
+            <Route path="/receipts/:id" element={<ReceiptDetailPage />} />
             <Route path="/stores" element={<StoresPage />} />
             <Route path="/items" element={<ItemsPage />} />
           </Routes>

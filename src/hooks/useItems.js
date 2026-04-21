@@ -30,9 +30,29 @@ export function useItems() {
       .select()
       .single();
     if (err) throw err;
-    setData(prev => [...prev, row].sort((a, b) => a.name.localeCompare(b.name)));
+    setData((prev) => [...prev, row].sort((a, b) => a.name.localeCompare(b.name)));
     return row;
   }, []);
 
-  return { data, loading, error, refetch: fetch, addItem };
+  const updateItem = useCallback(async (id, patch) => {
+    const { data: row, error: err } = await supabase
+      .from('items')
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+    if (err) throw err;
+    setData((prev) =>
+      prev.map((it) => (it.id === id ? row : it)).sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    return row;
+  }, []);
+
+  const deleteItem = useCallback(async (id) => {
+    const { error: err } = await supabase.from('items').delete().eq('id', id);
+    if (err) throw err;
+    setData((prev) => prev.filter((it) => it.id !== id));
+  }, []);
+
+  return { data, loading, error, refetch: fetch, addItem, updateItem, deleteItem };
 }
