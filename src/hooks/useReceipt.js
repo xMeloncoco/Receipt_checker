@@ -77,6 +77,17 @@ export function useReceipt(id) {
     setLines((prev) => prev.filter((l) => l.id !== lineId));
   }, []);
 
+  const addLine = useCallback(async (payload) => {
+    const { data: row, error: err } = await supabase
+      .from('receipt_lines')
+      .insert({ ...payload, receipt_id: id })
+      .select('*, items(id, name, type, subtype)')
+      .single();
+    if (err) throw err;
+    setLines((prev) => [...prev, row]);
+    return row;
+  }, [id]);
+
   return {
     receipt,
     lines,
@@ -87,5 +98,6 @@ export function useReceipt(id) {
     deleteReceipt,
     updateLine,
     deleteLine,
+    addLine,
   };
 }

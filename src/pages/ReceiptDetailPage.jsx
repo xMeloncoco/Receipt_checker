@@ -184,12 +184,15 @@ export default function ReceiptDetailPage() {
     deleteReceipt,
     updateLine,
     deleteLine,
+    addLine,
   } = useReceipt(id);
 
   const [headerDraft, setHeaderDraft] = useState(null);
   const [headerBusy, setHeaderBusy] = useState(false);
   const [headerError, setHeaderError] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [addingLine, setAddingLine] = useState(false);
+  const [addLineError, setAddLineError] = useState(null);
   const imageUrl = useReceiptImageUrl(receipt?.image_url);
 
   const headerEditing = headerDraft !== null;
@@ -387,7 +390,34 @@ export default function ReceiptDetailPage() {
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-200 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-gray-700">Lines ({lines.length})</h2>
+              <button
+                onClick={async () => {
+                  setAddingLine(true);
+                  setAddLineError(null);
+                  try {
+                    await addLine({
+                      name_on_receipt: 'New line',
+                      quantity: 1,
+                      discount_per_item: 0,
+                      total_discount: 0,
+                    });
+                  } catch (err) {
+                    setAddLineError(err.message);
+                  } finally {
+                    setAddingLine(false);
+                  }
+                }}
+                disabled={addingLine}
+                className="text-xs px-3 py-1 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+              >
+                {addingLine ? 'Adding…' : '+ Add line'}
+              </button>
             </div>
+            {addLineError && (
+              <p className="px-5 py-2 text-xs text-red-600 bg-red-50 border-b border-red-200">
+                {addLineError}
+              </p>
+            )}
             {lines.length === 0 ? (
               <p className="py-8 text-center text-gray-400 text-sm">No lines.</p>
             ) : (

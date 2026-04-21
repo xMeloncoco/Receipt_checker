@@ -8,6 +8,7 @@ export default function ReviewLine({
   getOriginalValue,
   matchInfo,
   onOpenMatchSelector,
+  onRemove,
 }) {
   const field = (name, type = 'text', small = true) => (
     <EditableField
@@ -31,6 +32,18 @@ export default function ReviewLine({
     <div className={`border-b border-gray-100 py-3 ${rowBg}`}>
       {/* Main receipt line info */}
       <div className="flex flex-wrap items-start gap-2">
+        {/* Remove row button */}
+        {onRemove && (
+          <button
+            type="button"
+            onClick={() => onRemove(index)}
+            title="Remove this row"
+            className="shrink-0 w-6 h-6 mt-0.5 flex items-center justify-center rounded border border-red-200 text-red-500 text-xs hover:bg-red-50 hover:border-red-300 transition-colors"
+          >
+            &times;
+          </button>
+        )}
+
         {/* Name */}
         <div className="flex-1 min-w-[180px]">
           <EditableField
